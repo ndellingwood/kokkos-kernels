@@ -161,13 +161,15 @@ struct SPTRSV_SOLVE<KernelHandle, RowMapType, EntriesType, ValuesType, BType, XT
       if ( sptrsv_handle->is_symbolic_complete() == false ) {
         Experimental::lower_tri_symbolic(*sptrsv_handle, row_map, entries);
       }
-      Experimental::lower_tri_solve( *sptrsv_handle, row_map, entries, values, b, x);
+//      Experimental::lower_tri_solve( *sptrsv_handle, row_map, entries, values, b, x);
+      Experimental::tri_solve_chain( *sptrsv_handle, row_map, entries, values, b, x, true);
     }
     else {
       if ( sptrsv_handle->is_symbolic_complete() == false ) {
         Experimental::upper_tri_symbolic(*sptrsv_handle, row_map, entries);
       }
-      Experimental::upper_tri_solve( *sptrsv_handle, row_map, entries, values, b, x);
+      //Experimental::upper_tri_solve( *sptrsv_handle, row_map, entries, values, b, x);
+      Experimental::tri_solve_chain( *sptrsv_handle, row_map, entries, values, b, x, false);
     }
   }
 

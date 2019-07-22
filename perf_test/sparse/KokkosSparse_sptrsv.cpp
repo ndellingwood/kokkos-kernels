@@ -70,8 +70,7 @@ using namespace KokkosSparse::Experimental;
 using namespace KokkosKernels;
 using namespace KokkosKernels::Experimental;
 
-enum {DEFAULT, CUSPARSE, LVLSCHED_RP, LVLSCHED_TP1/*, LVLSCHED_TP2*/};
-
+enum {DEFAULT, CUSPARSE, LVLSCHED_RP, LVLSCHED_TP1, LVLSCHED_TP2};
 
 
 template<typename Scalar>
@@ -127,7 +126,6 @@ int test_sptrsv_perf(std::vector<int> tests, std::string& lfilename, std::string
     auto row_map = graph.row_map;
     auto entries = graph.entries;
     auto values  = triMtx.values;
-
 
 
 #ifdef KOKKOSKERNELS_ENABLE_TPL_CUSPARSE
@@ -227,13 +225,6 @@ int test_sptrsv_perf(std::vector<int> tests, std::string& lfilename, std::string
 #ifdef KOKKOSKERNELS_ENABLE_TPL_CUSPARSE
 // step 4: perform analysis
     else {
-#if 0
-      double *dvalues = (double *)(values.data());
-      int *drow_map = (int *)(row_map.data());
-      int *dentries = (int *)(entries.data());
-      double *dlhs = (double *)(lhs.data());
-      double *drhs = (double *)(rhs.data());
-#endif
       //int nnz = triMtx.nnz();
       //std::cout << "  cusparse path: analysis" << std::endl;
       //status = cusparseDcsrsv2_analysis(handle, trans, nrows, nnz, descr, (double*)dvalues, (int *)drow_map, (int *)dentries, info, policy, pBuffer);
@@ -284,7 +275,7 @@ int test_sptrsv_perf(std::vector<int> tests, std::string& lfilename, std::string
       return 1;
     }
     else {
-     std::cout << "Lower Tri Solve SUCCESS!" << std::endl;
+     std::cout << "\nLower Tri Solve Init Test: SUCCESS!\n" << std::endl;
     }
 
   
@@ -312,11 +303,32 @@ int test_sptrsv_perf(std::vector<int> tests, std::string& lfilename, std::string
       if(time>max_time) max_time = time;
       if(time<min_time) min_time = time;
     }
+
     std::cout << "LOOP_AVG_TIME:  " << ave_time/loop << std::endl;
     std::cout << "LOOP_MAX_TIME:  " << max_time << std::endl;
     std::cout << "LOOP_MIN_TIME:  " << min_time << std::endl;
 
+    // Output for level frequency plot
+    auto hnpl = kh.get_sptrsv_handle()->get_host_nodes_per_level();
+    auto nlevels = kh.get_sptrsv_handle()->get_num_levels();
+    std::string algmstring = kh.get_sptrsv_handle()->return_algorithm_string();
+    std::cout << algmstring << std::endl;
+    // Create filename
+    std::string hnpl_filename = "lower_nodes_per_level_" + algmstring + ".txt";
+    std::cout << hnpl_filename << std::endl;
+    std::cout << "  nlevels = " << nlevels << std::endl;
+    std::ofstream outfile;
+    outfile.open(hnpl_filename);
+    if (outfile.is_open()) {
+      for ( int i = 0; i < nlevels; ++i )
+        outfile << hnpl(i) << std::endl;
+      outfile.close();
+    }
+    else {
+      std::cout << "OUTFILE DID NOT OPEN!!!" << std::endl;
+    }
   }
+
 #ifdef KOKKOSKERNELS_ENABLE_TPL_CUSPARSE
 // step 6: free resources
     cudaFree(pBuffer);
@@ -324,7 +336,7 @@ int test_sptrsv_perf(std::vector<int> tests, std::string& lfilename, std::string
     cusparseDestroyMatDescr(descr);
     cusparseDestroy(handle);
 #endif
-  }
+  } // end lowertri
 
   std::cout << "\n\n" << std::endl;
 // UPPERTRI
@@ -450,13 +462,6 @@ int test_sptrsv_perf(std::vector<int> tests, std::string& lfilename, std::string
 #ifdef KOKKOSKERNELS_ENABLE_TPL_CUSPARSE
 // step 4: perform analysis
     else {
-#if 0
-      double *dvalues = (double *)(values.data());
-      int *drow_map = (int *)(row_map.data());
-      int *dentries = (int *)(entries.data());
-      double *dlhs = (double *)(lhs.data());
-      double *drhs = (double *)(rhs.data());
-#endif
       //int nnz = triMtx.nnz();
       //std::cout << "  cusparse path: analysis" << std::endl;
       //status = cusparseDcsrsv2_analysis(handle, trans, nrows, nnz, descr, (double*)dvalues, (int *)drow_map, (int *)dentries, info, policy, pBuffer);
@@ -506,7 +511,7 @@ int test_sptrsv_perf(std::vector<int> tests, std::string& lfilename, std::string
       return 1;
     }
     else {
-     std::cout << "Upper Tri Solve SUCCESS!" << std::endl;
+     std::cout << "\nUpper Tri Solve Init Test: SUCCESS!\n" << std::endl;
     }
   
     // Benchmark
@@ -537,7 +542,28 @@ int test_sptrsv_perf(std::vector<int> tests, std::string& lfilename, std::string
     std::cout << "LOOP_AVG_TIME:  " << ave_time/loop << std::endl;
     std::cout << "LOOP_MAX_TIME:  " << max_time << std::endl;
     std::cout << "LOOP_MIN_TIME:  " << min_time << std::endl;
+
+    // Output for level frequency plot
+    auto hnpl = kh.get_sptrsv_handle()->get_host_nodes_per_level();
+    auto nlevels = kh.get_sptrsv_handle()->get_num_levels();
+    std::string algmstring = kh.get_sptrsv_handle()->return_algorithm_string();
+    std::cout << algmstring << std::endl;
+    // Create filename
+    std::string hnpl_filename = "upper_nodes_per_level_" + algmstring + ".txt";
+    std::cout << hnpl_filename << std::endl;
+    std::cout << "  nlevels = " << nlevels << std::endl;
+    std::ofstream outfile;
+    outfile.open(hnpl_filename);
+    if (outfile.is_open()) {
+      for ( int i = 0; i < nlevels; ++i )
+        outfile << hnpl(i) << std::endl;
+      outfile.close();
+    }
+    else {
+      std::cout << "OUTFILE DID NOT OPEN!!!" << std::endl;
+    }
   }
+
 #ifdef KOKKOSKERNELS_ENABLE_TPL_CUSPARSE
 // step 6: free resources
     cudaFree(pBuffer);
@@ -545,7 +571,7 @@ int test_sptrsv_perf(std::vector<int> tests, std::string& lfilename, std::string
     cusparseDestroyMatDescr(descr);
     cusparseDestroy(handle);
 #endif
-  }
+  } // end uppertri
 
   return 0;
 }
@@ -570,6 +596,7 @@ void print_help_sptrsv() {
   printf("  -ts [T]         : Number of threads per team.\n");
   printf("  -vl [V]         : Vector-length (i.e. how many Cuda threads are a Kokkos 'thread').\n");
   printf("  --loop [LOOP]       : How many spmv to run to aggregate average time. \n");
+//  printf("  --write-lvl-freq: Write output files with number of nodes per level for each matrix and algorithm.\n");
 }
 
 

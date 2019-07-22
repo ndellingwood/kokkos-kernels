@@ -53,7 +53,8 @@ namespace KokkosSparse {
 namespace Experimental {
 
 // TP2 algorithm has issues with some offset-ordinal combo to be addressed
-enum class SPTRSVAlgorithm { SEQLVLSCHD_RP, SEQLVLSCHD_TP1, SEQLVLSCHED_TP2 };
+enum class SPTRSVAlgorithm { SEQLVLSCHD_RP, SEQLVLSCHD_TP1, SEQLVLSCHED_TP2, CHSEQLVLSCHD_TP1, CHSEQLVLSCHED_TP2 };
+// TODO Just added enum labels for "chain" implementations - may need to completely replace the existing algms with these once complete
 
 template <class size_type_, class lno_t_, class scalar_t_,
           class ExecutionSpace,
@@ -95,6 +96,7 @@ public:
 
   typedef typename std::make_signed<typename nnz_row_view_t::non_const_value_type>::type signed_integral_t;
   typedef Kokkos::View< signed_integral_t*, typename nnz_row_view_t::array_layout, typename nnz_row_view_t::device_type, typename nnz_row_view_t::memory_traits > signed_nnz_lno_view_t;
+  typedef typename signed_nnz_lno_view_t::HostMirror host_signed_nnz_lno_view_t;
 
 
 private:
@@ -102,6 +104,7 @@ private:
   signed_nnz_lno_view_t level_list;
   nnz_lno_view_t nodes_per_level;
   nnz_lno_view_t nodes_grouped_by_level;
+
 
   size_type nrows;
   size_type nlevel;
@@ -115,6 +118,12 @@ private:
   int team_size;
   int vector_size;
 
+  // TODO Store diagonal offsets
+  nnz_lno_view_t diagonal_offsets;
+
+  host_signed_nnz_lno_view_t h_chain_ptr;
+  size_type num_chain_entries;
+
 public:
 
   SPTRSVHandle ( SPTRSVAlgorithm choice, const size_type nrows_, bool lower_tri_, bool symbolic_complete_ = false ) :
@@ -127,7 +136,10 @@ public:
     symbolic_complete( symbolic_complete_ ),
     algm(choice),
     team_size(-1),
-    vector_size(-1)
+    vector_size(-1),
+    diagonal_offsets(),
+    h_chain_ptr(),
+    num_chain_entries(0)
   {}
 
 #if 0
@@ -187,11 +199,14 @@ public:
   void reset_handle( const size_type nrows_ ) {
     set_nrows(nrows_);
     set_num_levels(0);
-    level_list = signed_nnz_lno_view_t( Kokkos::ViewAllocateWithoutInitializing("level_list"), nrows_),
+    level_list = signed_nnz_lno_view_t( Kokkos::ViewAllocateWithoutInitializing("level_list"), nrows_);
     Kokkos::deep_copy( level_list, signed_integral_t(-1) );
-    nodes_per_level =  nnz_lno_view_t("nodes_per_level", nrows_),
-    nodes_grouped_by_level = nnz_lno_view_t("nodes_grouped_by_level", nrows_),
-    reset_symbolic_complete();
+    nodes_per_level =  nnz_lno_view_t("nodes_per_level", nrows_);
+    nodes_grouped_by_level = nnz_lno_view_t("nodes_grouped_by_level", nrows_);
+    diagonal_offsets = nnz_lno_view_t(Kokkos::ViewAllocateWithoutInitializing("diagonal_offsets"), nrows_);
+    h_chain_ptr = host_signed_nnz_lno_view_t("h_chain_ptr", nrows_);
+    set_num_chain_entries(0);
+    set_symbolic_incomplete();
   }
 
   virtual ~SPTRSVHandle() {};
@@ -205,7 +220,27 @@ public:
   signed_nnz_lno_view_t get_level_list() const { return level_list; }
 
   KOKKOS_INLINE_FUNCTION
+  signed_nnz_lno_view_t get_host_level_list() const { 
+    auto hlevel_list = Kokkos::create_mirror_view(this->level_list);
+    Kokkos::deep_copy(hlevel_list, this->level_list);
+    return hlevel_list; 
+  }
+
+  KOKKOS_INLINE_FUNCTION
+  nnz_lno_view_t get_diagonal_offsets() const { return diagonal_offsets; }
+
+  KOKKOS_INLINE_FUNCTION
+  host_signed_nnz_lno_view_t get_host_chain_ptr() const { return h_chain_ptr; }
+
+  KOKKOS_INLINE_FUNCTION
   nnz_lno_view_t get_nodes_per_level() const { return nodes_per_level; }
+
+  KOKKOS_INLINE_FUNCTION
+  nnz_lno_view_t get_host_nodes_per_level() const { 
+    auto hnodes_per_level = Kokkos::create_mirror_view(this->nodes_per_level);
+    Kokkos::deep_copy(hnodes_per_level, this->nodes_per_level);
+    return hnodes_per_level; 
+  }
 
   KOKKOS_INLINE_FUNCTION
   nnz_lno_view_t get_nodes_grouped_by_level() const { return nodes_grouped_by_level; }
@@ -225,13 +260,19 @@ public:
   void set_num_levels(size_type nlevels_) { this->nlevel = nlevels_; }
 
   void set_symbolic_complete() { this->symbolic_complete = true; }
-  void reset_symbolic_complete() { this->symbolic_complete = false; }
+  void set_symbolic_incomplete() { this->symbolic_complete = false; }
 
-  void set_team_size(const int ts) {this->team_size = ts;}
+  KOKKOS_INLINE_FUNCTION
   int get_team_size() const {return this->team_size;}
+  void set_team_size(const int ts) {this->team_size = ts;}
 
-  void set_vector_size(const int vs) {this->vector_size = vs;}
+  KOKKOS_INLINE_FUNCTION
   int get_vector_size() const {return this->vector_size;}
+  void set_vector_size(const int vs) {this->vector_size = vs;}
+
+  KOKKOS_INLINE_FUNCTION
+  int get_num_chain_entries() const {return this->num_chain_entries;}
+  void set_num_chain_entries(const int nce) {this->num_chain_entries = nce;}
 
   void print_algorithm() { 
     if ( algm == SPTRSVAlgorithm::SEQLVLSCHD_RP )
@@ -245,6 +286,23 @@ public:
       std::cout << "WARNING: With CUDA this is currently only reliable with int-int ordinal-offset pair" << std::endl;
     }
   }
+
+
+  std::string return_algorithm_string() { 
+    std::string ret_string;
+
+    if ( algm == SPTRSVAlgorithm::SEQLVLSCHD_RP )
+      ret_string = "SEQLVLSCHD_RP";
+
+    if ( algm == SPTRSVAlgorithm::SEQLVLSCHD_TP1 )
+      ret_string = "SEQLVLSCHD_TP1";
+
+    if ( algm == SPTRSVAlgorithm::SEQLVLSCHED_TP2 ) {
+      ret_string = "SEQLVLSCHED_TP2";
+    }
+    return ret_string;
+  }
+
 
   inline SPTRSVAlgorithm StringToSPTRSVAlgorithm(std::string & name) {
     if(name=="SPTRSV_DEFAULT")             return SPTRSVAlgorithm::SEQLVLSCHD_RP;

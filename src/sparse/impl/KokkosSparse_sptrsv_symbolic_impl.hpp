@@ -53,6 +53,8 @@
 
 //#define LVL_OUTPUT_INFO
 
+// TODO Pass values array and store diagonal entries - should this always be done or optional?
+
 namespace KokkosSparse {
 namespace Impl {
 namespace Experimental {
@@ -100,6 +102,9 @@ void lower_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, co
   HostSignedEntriesType previous_level_list( Kokkos::ViewAllocateWithoutInitializing("previous_level_list"), nrows );
   Kokkos::deep_copy( previous_level_list, signed_integral_t(-1) );
 
+  auto diagonal_offsets = thandle.get_diagonal_offsets();
+  // diagonal_offsets is uninitialized - deep_copy unnecessary at the beginning, only needed at the end
+  auto hdiagonal_offsets = Kokkos::create_mirror_view(diagonal_offsets);
 
   // node 0 is trivially independent in lower tri solve, start with it in level 0
   size_type level = 0;
@@ -126,6 +131,13 @@ void lower_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, co
               break;
             }
           }
+          else if ( col == row ) {
+            //FIXME Not reliable to ensure all entries stored yet
+            //TODO if loop breaks before this is found, this may not get stored...
+            //TODO possibly store/sort in same order as the nodes in the level_list
+            //TODO Maybe run FULL check the first round through without breaking in upper if statement...
+            hdiagonal_offsets(row) = offset;
+          }
         } // end for offset , i.e. cols of this row
 
         if ( is_root == true ) {
@@ -149,6 +161,96 @@ void lower_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, co
   thandle.set_symbolic_complete();
   thandle.set_num_levels(level);
 
+  // Create the chain now
+  // TODO Lazy allocation of h_chain_ptr - use num_levels as overestimate (rather than nrows)
+  // TODO What about the host? Execute "single_block" in serial? Or, different team_size?
+  // FIXME Implementations will need to be templated on exec space it seems...
+  auto h_chain_ptr = thandle.get_host_chain_ptr();
+  h_chain_ptr(0) = 0;
+  size_type chain_length = 0;
+  size_type num_chain_entries = 0;
+  int update_chain = 0;
+  const int cutoff = std::is_same<typename Kokkos::DefaultExecutionSpace::memory_space, Kokkos::HostSpace>::value ? 1 : 256; // TODO chain cutoff hard-coded to 256: make this a "threshold" parameter in the handle
+  for ( size_type i = 0; i < level; ++i ) {
+#define ATTEMPTEDFIX
+#ifdef ATTEMPTEDFIX
+    auto cnpl = nodes_per_level(i);
+    std::cout << "incre chain_length  npl(" << i << ") = " << nodes_per_level(i) << std::endl;
+    if (cnpl <= cutoff) {
+      // this level may be part of a chain passed to the "single_block" solver to reduce kernel launches
+      chain_length += 1;
+    }
+    else {
+      // Too many levels to run on single block...
+      // If first lvl <= cutoff but next level isn't, the two aren't separately updated and info is lost...
+      // if chain_length > 0, take path so that chain-links updated, then current too large chain updated (i.e. 2 updates); if chain_length == 0, then no previous chains and only one update required (npl too large for single-block
+      update_chain = chain_length > 0 ? 2 : 1;
+    }
+
+    // if we hit final level before a trigger to update the chain, than override it - in this case, there was not a larger value to miss cutoff and reset the update
+    if ( update_chain == 0 && i == level-1 ) { update_chain = 1; }
+
+
+    if (update_chain == 1) {
+      num_chain_entries += 1;
+      std::cout << "  nce = " << num_chain_entries << "  chain_length = " << chain_length << std::endl;
+      if (chain_length == 0) {
+        h_chain_ptr(num_chain_entries) = h_chain_ptr(num_chain_entries-1) + 1;
+      }
+      else {
+        h_chain_ptr(num_chain_entries) = h_chain_ptr(num_chain_entries-1) + chain_length;
+      }
+      chain_length = 0; //reset
+      update_chain = 0; //reset
+    }
+
+    // Two updates required - should only occur if chain_length > 0
+    if (update_chain == 2) {
+      if (chain_length == 0) { std::cout << "MAJOR LOGIC ERROR! TERMINATE!" << std::endl; exit(-1); }
+
+      num_chain_entries += 1;
+      h_chain_ptr(num_chain_entries) = h_chain_ptr(num_chain_entries-1) + chain_length;
+      std::cout << "  nce = " << num_chain_entries << "  chain_length = " << chain_length << std::endl;
+
+      num_chain_entries += 1;
+      h_chain_ptr(num_chain_entries) = h_chain_ptr(num_chain_entries-1) + 1;
+
+      chain_length = 0; //reset
+      update_chain = 0; //reset
+    }
+
+/*
+    if ( update_chain || i == level-1 ) {
+      num_chain_entries += 1;
+      std::cout << "  nce = " << num_chain_entries << "  chain_length = " << chain_length << std::endl;
+      if (chain_length == 0) {
+        h_chain_ptr(num_chain_entries) = h_chain_ptr(num_chain_entries-1) + 1;
+      }
+      else {
+        h_chain_ptr(num_chain_entries) = h_chain_ptr(num_chain_entries-1) + chain_length;
+      }
+      chain_length = 0; //reset
+      update_chain = false; //reset
+    }
+*/
+#else
+#endif
+  }
+  thandle.set_num_chain_entries(num_chain_entries);
+  std::cout << "  num_chain_entries = " << thandle.get_num_chain_entries() << std::endl;
+  for ( size_type i = 0; i < num_chain_entries+1; ++i )
+  {
+    std::cout << "chain_ptr(" << i << "): " << h_chain_ptr(i) << std::endl;
+  }
+  // Usage:
+  // for c in [0, num_chain_entries)
+  //   s = h_chain_ptr(c); e = h_chain_ptr(c+1);
+  //   num_levels_in_current_chain = e - s;
+  //   if nlicc > 256
+  //     call current_alg
+  //   else
+  //     call single_block(s,e)
+
   // Output check
 #ifdef LVL_OUTPUT_INFO
   std::cout << "  set symbolic complete: " << thandle.is_symbolic_complete() << std::endl;
@@ -168,6 +270,7 @@ void lower_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, co
   Kokkos::deep_copy(dnodes_grouped_by_level, nodes_grouped_by_level);
   Kokkos::deep_copy(dnodes_per_level, nodes_per_level);
   Kokkos::deep_copy(dlevel_list, level_list);
+  Kokkos::deep_copy(diagonal_offsets, hdiagonal_offsets);
  }
 } // end lowertri_level_sched
 
@@ -214,6 +317,9 @@ void upper_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, co
   HostSignedEntriesType previous_level_list( Kokkos::ViewAllocateWithoutInitializing("previous_level_list"), nrows);
   Kokkos::deep_copy( previous_level_list, signed_integral_t(-1) );
 
+  auto diagonal_offsets = thandle.get_diagonal_offsets();
+  // diagonal_offsets is uninitialized - deep_copy unnecessary at the beginning, only needed at the end
+  auto hdiagonal_offsets = Kokkos::create_mirror_view(diagonal_offsets);
 
   // final row is trivially independent in upper tri solve, start with it in level 0
   size_type level = 0;
@@ -240,6 +346,13 @@ void upper_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, co
               break;
             }
           }
+          else if ( col == row ) {
+            //FIXME Not reliable to ensure all entries stored yet
+            //TODO if loop breaks before this is found, this may not get stored...
+            //TODO possibly store/sort in same order as the nodes in the level_list
+            //TODO Maybe run FULL check the first round through without breaking in upper if statement...
+            hdiagonal_offsets(row) = offset;
+          }
         } // end for offset , i.e. cols of this row
 
         if ( is_root == true ) {
@@ -263,6 +376,96 @@ void upper_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, co
   thandle.set_symbolic_complete();
   thandle.set_num_levels(level);
 
+  // Create the chain now
+  // TODO Lazy allocation of h_chain_ptr - use num_levels as overestimate (rather than nrows)
+  // TODO What about the host? Execute "single_block" in serial? Or, different team_size?
+  // FIXME Implementations will need to be templated on exec space it seems...
+  auto h_chain_ptr = thandle.get_host_chain_ptr();
+  h_chain_ptr(0) = 0;
+  size_type chain_length = 0;
+  size_type num_chain_entries = 0;
+  int update_chain = 0;
+  const int cutoff = std::is_same<typename Kokkos::DefaultExecutionSpace::memory_space, Kokkos::HostSpace>::value ? 1 : 256; // TODO chain cutoff hard-coded to 256: make this a "threshold" parameter in the handle
+  for ( size_type i = 0; i < level; ++i ) {
+#define ATTEMPTEDFIX
+#ifdef ATTEMPTEDFIX
+    auto cnpl = nodes_per_level(i);
+    std::cout << "incre chain_length  npl(" << i << ") = " << nodes_per_level(i) << std::endl;
+    if (cnpl <= cutoff) {
+      // this level may be part of a chain passed to the "single_block" solver to reduce kernel launches
+      chain_length += 1;
+    }
+    else {
+      // Too many levels to run on single block...
+      // If first lvl <= cutoff but next level isn't, the two aren't separately updated and info is lost...
+      // if chain_length > 0, take path so that chain-links updated, then current too large chain updated (i.e. 2 updates); if chain_length == 0, then no previous chains and only one update required (npl too large for single-block
+      update_chain = chain_length > 0 ? 2 : 1;
+    }
+
+    // if we hit final level before a trigger to update the chain, than override it - in this case, there was not a larger value to miss cutoff and reset the update
+    if ( update_chain == 0 && i == level-1 ) { update_chain = 1; }
+
+
+    if (update_chain == 1) {
+      num_chain_entries += 1;
+      std::cout << "  nce = " << num_chain_entries << "  chain_length = " << chain_length << std::endl;
+      if (chain_length == 0) {
+        h_chain_ptr(num_chain_entries) = h_chain_ptr(num_chain_entries-1) + 1;
+      }
+      else {
+        h_chain_ptr(num_chain_entries) = h_chain_ptr(num_chain_entries-1) + chain_length;
+      }
+      chain_length = 0; //reset
+      update_chain = 0; //reset
+    }
+
+    // Two updates required - should only occur if chain_length > 0
+    if (update_chain == 2) {
+      if (chain_length == 0) { std::cout << "MAJOR LOGIC ERROR! TERMINATE!" << std::endl; exit(-1); }
+
+      num_chain_entries += 1;
+      h_chain_ptr(num_chain_entries) = h_chain_ptr(num_chain_entries-1) + chain_length;
+      std::cout << "  nce = " << num_chain_entries << "  chain_length = " << chain_length << std::endl;
+
+      num_chain_entries += 1;
+      h_chain_ptr(num_chain_entries) = h_chain_ptr(num_chain_entries-1) + 1;
+
+      chain_length = 0; //reset
+      update_chain = 0; //reset
+    }
+
+/*
+    if ( update_chain > 0 || i == level-1 ) {
+      num_chain_entries += 1;
+      std::cout << "  nce = " << num_chain_entries << "  chain_length = " << chain_length << std::endl;
+      if (chain_length == 0) {
+        h_chain_ptr(num_chain_entries) = h_chain_ptr(num_chain_entries-1) + 1;
+      }
+      else {
+        h_chain_ptr(num_chain_entries) = h_chain_ptr(num_chain_entries-1) + chain_length;
+      }
+      chain_length = 0; //reset
+      update_chain = false; //reset
+    }
+*/
+#else
+#endif
+  }
+  thandle.set_num_chain_entries(num_chain_entries);
+  std::cout << "  num_chain_entries = " << thandle.get_num_chain_entries() << std::endl;
+  for ( size_type i = 0; i < num_chain_entries+1; ++i )
+  {
+    std::cout << "chain_ptr(" << i << "): " << h_chain_ptr(i) << std::endl;
+  }
+  // Usage:
+  // for c in [0, num_chain_entries)
+  //   s = h_chain_ptr(c); e = h_chain_ptr(c+1);
+  //   num_levels_in_current_chain = e - s;
+  //   if nlicc > 256
+  //     call current alg
+  //   else
+  //     call single_block(s,e)
+
   // Output check
 #ifdef LVL_OUTPUT_INFO
   std::cout << "  set symbolic complete: " << thandle.is_symbolic_complete() << std::endl;
@@ -282,8 +485,10 @@ void upper_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, co
   Kokkos::deep_copy(dnodes_grouped_by_level, nodes_grouped_by_level);
   Kokkos::deep_copy(dnodes_per_level, nodes_per_level);
   Kokkos::deep_copy(dlevel_list, level_list);
+  Kokkos::deep_copy(diagonal_offsets, hdiagonal_offsets);
  }
 } // end uppertri_level_sched
+
 
 
 } // namespace Experimental
