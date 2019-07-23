@@ -70,7 +70,7 @@ using namespace KokkosSparse::Experimental;
 using namespace KokkosKernels;
 using namespace KokkosKernels::Experimental;
 
-enum {DEFAULT, CUSPARSE, LVLSCHED_RP, LVLSCHED_TP1, LVLSCHED_TP2};
+enum {DEFAULT, CUSPARSE, LVLSCHED_RP, LVLSCHED_TP1, LVLSCHED_TP2, LVLSCHED_TP1CHAIN};
 
 
 template<typename Scalar>
@@ -188,6 +188,13 @@ int test_sptrsv_perf(std::vector<int> tests, std::string& lfilename, std::string
         break;
       case LVLSCHED_TP1:
         kh.create_sptrsv_handle(SPTRSVAlgorithm::SEQLVLSCHD_TP1, nrows, is_lower_tri);
+        kh.get_sptrsv_handle()->print_algorithm();
+        break;
+      case LVLSCHED_TP1CHAIN:
+        printf("TP1 with CHAIN\n");
+        kh.create_sptrsv_handle(SPTRSVAlgorithm::SEQLVLSCHD_TP1, nrows, is_lower_tri);
+        //const int thresh = 1;
+        kh.get_sptrsv_handle()->use_chain_with_threshold(1);
         kh.get_sptrsv_handle()->print_algorithm();
         break;
 /*
@@ -427,6 +434,13 @@ int test_sptrsv_perf(std::vector<int> tests, std::string& lfilename, std::string
         kh.create_sptrsv_handle(SPTRSVAlgorithm::SEQLVLSCHD_TP1, nrows, is_lower_tri);
         kh.get_sptrsv_handle()->print_algorithm();
         break;
+      case LVLSCHED_TP1CHAIN:
+        printf("TP1 with CHAIN\n");
+        kh.create_sptrsv_handle(SPTRSVAlgorithm::SEQLVLSCHD_TP1, nrows, is_lower_tri);
+        //const int thresh = 1;
+        kh.get_sptrsv_handle()->use_chain_with_threshold(1);
+        kh.get_sptrsv_handle()->print_algorithm();
+        break;
 /*
       case LVLSCHED_TP2:
         kh.create_sptrsv_handle(SPTRSVAlgorithm::SEQLVLSCHED_TP2, nrows, is_lower_tri);
@@ -627,6 +641,9 @@ int main(int argc, char **argv)
     }
     if((strcmp(argv[i],"lvltp1")==0)) {
       tests.push_back( LVLSCHED_TP1 );
+    }
+    if((strcmp(argv[i],"lvltp1chain")==0)) {
+      tests.push_back( LVLSCHED_TP1CHAIN );
     }
 /*
     if((strcmp(argv[i],"lvltp2")==0)) {

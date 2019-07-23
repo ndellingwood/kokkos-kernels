@@ -165,15 +165,17 @@ void lower_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, co
   // TODO Lazy allocation of h_chain_ptr - use num_levels as overestimate (rather than nrows)
   // TODO What about the host? Execute "single_block" in serial? Or, different team_size?
   // FIXME Implementations will need to be templated on exec space it seems...
+  auto cutoff_threshold = thandle.get_chain_threshold();
+ if (cutoff_threshold > -1) {
   auto h_chain_ptr = thandle.get_host_chain_ptr();
   h_chain_ptr(0) = 0;
   size_type chain_length = 0;
   size_type num_chain_entries = 0;
   int update_chain = 0;
-  const int cutoff = std::is_same<typename Kokkos::DefaultExecutionSpace::memory_space, Kokkos::HostSpace>::value ? 1 : 256; // TODO chain cutoff hard-coded to 256: make this a "threshold" parameter in the handle
+  //const int cutoff = std::is_same<typename Kokkos::DefaultExecutionSpace::memory_space, Kokkos::HostSpace>::value ? 1 : 256; // TODO chain cutoff hard-coded to 256: make this a "threshold" parameter in the handle
+  const int cutoff = cutoff_threshold;
+  std::cout << "cutoff = " << cutoff << std::endl;
   for ( size_type i = 0; i < level; ++i ) {
-#define ATTEMPTEDFIX
-#ifdef ATTEMPTEDFIX
     auto cnpl = nodes_per_level(i);
     std::cout << "incre chain_length  npl(" << i << ") = " << nodes_per_level(i) << std::endl;
     if (cnpl <= cutoff) {
@@ -218,23 +220,6 @@ void lower_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, co
       chain_length = 0; //reset
       update_chain = 0; //reset
     }
-
-/*
-    if ( update_chain || i == level-1 ) {
-      num_chain_entries += 1;
-      std::cout << "  nce = " << num_chain_entries << "  chain_length = " << chain_length << std::endl;
-      if (chain_length == 0) {
-        h_chain_ptr(num_chain_entries) = h_chain_ptr(num_chain_entries-1) + 1;
-      }
-      else {
-        h_chain_ptr(num_chain_entries) = h_chain_ptr(num_chain_entries-1) + chain_length;
-      }
-      chain_length = 0; //reset
-      update_chain = false; //reset
-    }
-*/
-#else
-#endif
   }
   thandle.set_num_chain_entries(num_chain_entries);
   std::cout << "  num_chain_entries = " << thandle.get_num_chain_entries() << std::endl;
@@ -242,6 +227,7 @@ void lower_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, co
   {
     std::cout << "chain_ptr(" << i << "): " << h_chain_ptr(i) << std::endl;
   }
+ }
   // Usage:
   // for c in [0, num_chain_entries)
   //   s = h_chain_ptr(c); e = h_chain_ptr(c+1);
@@ -380,15 +366,17 @@ void upper_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, co
   // TODO Lazy allocation of h_chain_ptr - use num_levels as overestimate (rather than nrows)
   // TODO What about the host? Execute "single_block" in serial? Or, different team_size?
   // FIXME Implementations will need to be templated on exec space it seems...
+  auto cutoff_threshold = thandle.get_chain_threshold();
+ if (cutoff_threshold > -1) {
   auto h_chain_ptr = thandle.get_host_chain_ptr();
   h_chain_ptr(0) = 0;
   size_type chain_length = 0;
   size_type num_chain_entries = 0;
   int update_chain = 0;
-  const int cutoff = std::is_same<typename Kokkos::DefaultExecutionSpace::memory_space, Kokkos::HostSpace>::value ? 1 : 256; // TODO chain cutoff hard-coded to 256: make this a "threshold" parameter in the handle
+  //const int cutoff = std::is_same<typename Kokkos::DefaultExecutionSpace::memory_space, Kokkos::HostSpace>::value ? 1 : 256; // TODO chain cutoff hard-coded to 256: make this a "threshold" parameter in the handle
+  const int cutoff = cutoff_threshold;
+  std::cout << "cutoff = " << cutoff << std::endl;
   for ( size_type i = 0; i < level; ++i ) {
-#define ATTEMPTEDFIX
-#ifdef ATTEMPTEDFIX
     auto cnpl = nodes_per_level(i);
     std::cout << "incre chain_length  npl(" << i << ") = " << nodes_per_level(i) << std::endl;
     if (cnpl <= cutoff) {
@@ -433,23 +421,6 @@ void upper_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, co
       chain_length = 0; //reset
       update_chain = 0; //reset
     }
-
-/*
-    if ( update_chain > 0 || i == level-1 ) {
-      num_chain_entries += 1;
-      std::cout << "  nce = " << num_chain_entries << "  chain_length = " << chain_length << std::endl;
-      if (chain_length == 0) {
-        h_chain_ptr(num_chain_entries) = h_chain_ptr(num_chain_entries-1) + 1;
-      }
-      else {
-        h_chain_ptr(num_chain_entries) = h_chain_ptr(num_chain_entries-1) + chain_length;
-      }
-      chain_length = 0; //reset
-      update_chain = false; //reset
-    }
-*/
-#else
-#endif
   }
   thandle.set_num_chain_entries(num_chain_entries);
   std::cout << "  num_chain_entries = " << thandle.get_num_chain_entries() << std::endl;
@@ -457,6 +428,7 @@ void upper_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, co
   {
     std::cout << "chain_ptr(" << i << "): " << h_chain_ptr(i) << std::endl;
   }
+ }
   // Usage:
   // for c in [0, num_chain_entries)
   //   s = h_chain_ptr(c); e = h_chain_ptr(c+1);

@@ -124,22 +124,25 @@ private:
   host_signed_nnz_lno_view_t h_chain_ptr;
   size_type num_chain_entries;
 
+  signed_integral_t chain_threshold;
+
 public:
 
-  SPTRSVHandle ( SPTRSVAlgorithm choice, const size_type nrows_, bool lower_tri_, bool symbolic_complete_ = false ) :
+  SPTRSVHandle(SPTRSVAlgorithm choice, const size_type nrows_, bool lower_tri_, bool symbolic_complete_ = false) :
     level_list(),
     nodes_per_level(),
     nodes_grouped_by_level(),
     nrows(nrows_),
     nlevel(0),
-    lower_tri( lower_tri_ ),
-    symbolic_complete( symbolic_complete_ ),
+    lower_tri(lower_tri_),
+    symbolic_complete(symbolic_complete_),
     algm(choice),
     team_size(-1),
     vector_size(-1),
     diagonal_offsets(),
     h_chain_ptr(),
-    num_chain_entries(0)
+    num_chain_entries(0),
+    chain_threshold(-1)
   {}
 
 #if 0
@@ -196,7 +199,7 @@ public:
 
 #endif
 
-  void reset_handle( const size_type nrows_ ) {
+  void reset_handle(const size_type nrows_) {
     set_nrows(nrows_);
     set_num_levels(0);
     level_list = signed_nnz_lno_view_t( Kokkos::ViewAllocateWithoutInitializing("level_list"), nrows_);
@@ -204,9 +207,15 @@ public:
     nodes_per_level =  nnz_lno_view_t("nodes_per_level", nrows_);
     nodes_grouped_by_level = nnz_lno_view_t("nodes_grouped_by_level", nrows_);
     diagonal_offsets = nnz_lno_view_t(Kokkos::ViewAllocateWithoutInitializing("diagonal_offsets"), nrows_);
-    h_chain_ptr = host_signed_nnz_lno_view_t("h_chain_ptr", nrows_);
+    if (get_chain_threshold() > -1) {
+      h_chain_ptr = host_signed_nnz_lno_view_t("h_chain_ptr", nrows_);
+    }
+    else {
+      h_chain_ptr = host_signed_nnz_lno_view_t();
+    }
     set_num_chain_entries(0);
     set_symbolic_incomplete();
+    use_chain_with_threshold(-1);
   }
 
   virtual ~SPTRSVHandle() {};
@@ -250,6 +259,17 @@ public:
 
   KOKKOS_INLINE_FUNCTION
   void set_nrows(const size_type nrows_) { this->nrows = nrows_; }
+
+
+  KOKKOS_INLINE_FUNCTION
+  void use_chain_with_threshold(const signed_integral_t threshold) { 
+    this->chain_threshold = threshold; 
+    h_chain_ptr = host_signed_nnz_lno_view_t("h_chain_ptr", this->nrows);
+  }
+
+  KOKKOS_INLINE_FUNCTION
+  signed_integral_t get_chain_threshold () const { return this->chain_threshold; }
+
 
   bool is_lower_tri() const { return lower_tri; }
   bool is_upper_tri() const { return !lower_tri; }

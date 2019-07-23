@@ -896,9 +896,6 @@ void tri_solve_chain(TriSolveHandle & thandle, const RowMapType row_map, const E
     size_type schain = h_chain_ptr(chainlink);
     size_type echain = h_chain_ptr(chainlink+1);
 
-    // FIXME mapping echain to nodes_grouped_by_level entries not working as expected...
-    // Broken here or in creation of the chain_ptr????
-    //   chain_ptr needs to mirror the ngpl in the sense that all nodes grouped in a level must remain together in a "link" of the chain; currently I am splitting them, this is incorrect; levels stay together; the chain_ptr may group multiple consecutive levels into a link, but each level of nodes must stay grouped; the size of the link determines which solve is executed
     if ( echain - schain == 1 ) {
       std::cout << "Call regular single-link TP - chainlink: " << chainlink << std::endl;
       // run normal algm as this is a single level
@@ -906,6 +903,7 @@ void tri_solve_chain(TriSolveHandle & thandle, const RowMapType row_map, const E
       if ( thandle.get_algorithm() == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_TP1 ) {
         typedef Kokkos::TeamPolicy<execution_space> policy_type;
         int team_size = thandle.get_team_size();
+        // TODO Check that team_size (if not -1) is valid in Kokkos
 
         size_type lvl_nodes = hnodes_per_level(schain); //lvl == echain????
 
@@ -937,7 +935,11 @@ void tri_solve_chain(TriSolveHandle & thandle, const RowMapType row_map, const E
         size_type lvl_nodes = 0;
 
         typedef Kokkos::TeamPolicy<execution_space> policy_type;
-        const int team_size = std::is_same<typename Kokkos::DefaultExecutionSpace::memory_space, Kokkos::HostSpace>::value ? 1 : 256; // TODO chainlink cutoff hard-coded to 256: make this a "threshold" parameter in the handle
+        auto cutoff = thandle.get_chain_threshold();
+        const int team_size = cutoff;
+        // TODO Add check that team_size and cutoff are compatible - team_size max has various restrictions imposed by hardware etc.
+        // This should be done within the handle, when the cutoff is set? No, need the functor present to check
+//        const int team_size = std::is_same<typename Kokkos::DefaultExecutionSpace::memory_space, Kokkos::HostSpace>::value ? 1 : 256; // TODO chainlink cutoff hard-coded to 256: make this a "threshold" parameter in the handle
 
         if (is_lower) {
           LowerTriLvlSchedTP1SingleBlockFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, nodes_per_level, node_count, schain, echain);
