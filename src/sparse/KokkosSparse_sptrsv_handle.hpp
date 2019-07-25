@@ -91,6 +91,7 @@ public:
 
   typedef typename Kokkos::View<nnz_lno_t *, HandleTempMemorySpace> nnz_lno_view_temp_t;
   typedef typename Kokkos::View<nnz_lno_t *, HandlePersistentMemorySpace> nnz_lno_view_t;
+  typedef typename nnz_lno_view_t::HostMirror host_nnz_lno_view_t;
  // typedef typename nnz_lno_persistent_work_view_t::HostMirror nnz_lno_persistent_work_host_view_t; //Host view type
 
 
@@ -301,8 +302,8 @@ public:
   KOKKOS_INLINE_FUNCTION
   signed_nnz_lno_view_t get_level_list() const { return level_list; }
 
-  KOKKOS_INLINE_FUNCTION
-  signed_nnz_lno_view_t get_host_level_list() const { 
+  inline
+  host_signed_nnz_lno_view_t get_host_level_list() const { 
     auto hlevel_list = Kokkos::create_mirror_view(this->level_list);
     Kokkos::deep_copy(hlevel_list, this->level_list);
     return hlevel_list; 
@@ -311,14 +312,14 @@ public:
   KOKKOS_INLINE_FUNCTION
   nnz_lno_view_t get_diagonal_offsets() const { return diagonal_offsets; }
 
-  KOKKOS_INLINE_FUNCTION
+  inline
   host_signed_nnz_lno_view_t get_host_chain_ptr() const { return h_chain_ptr; }
 
   KOKKOS_INLINE_FUNCTION
   nnz_lno_view_t get_nodes_per_level() const { return nodes_per_level; }
 
-  KOKKOS_INLINE_FUNCTION
-  nnz_lno_view_t get_host_nodes_per_level() const { 
+  inline
+  host_nnz_lno_view_t get_host_nodes_per_level() const { 
     auto hnodes_per_level = Kokkos::create_mirror_view(this->nodes_per_level);
     Kokkos::deep_copy(hnodes_per_level, this->nodes_per_level);
     return hnodes_per_level; 
@@ -329,13 +330,10 @@ public:
 
   KOKKOS_INLINE_FUNCTION
   size_type get_nrows() const { return nrows; }
-
-  KOKKOS_INLINE_FUNCTION
   void set_nrows(const size_type nrows_) { this->nrows = nrows_; }
 
 
   // FIXME This is only interface for setting the chain_threshold for now, but results in unnecessary realloc of h_chain_ptr
-  KOKKOS_INLINE_FUNCTION
   void reset_chain_threshold(const signed_integral_t threshold) { 
     // TODO Must check that team_size corresponding to chain_threshold is valid
     if (threshold != this->chain_threshold || h_chain_ptr.span() == 0) {
@@ -366,7 +364,9 @@ public:
 
   bool is_symbolic_complete() const { return symbolic_complete; }
 
+  KOKKOS_INLINE_FUNCTION
   size_type get_num_levels() const { return nlevel; }
+
   void set_num_levels(size_type nlevels_) { this->nlevel = nlevels_; }
 
   void set_symbolic_complete() { this->symbolic_complete = true; }
