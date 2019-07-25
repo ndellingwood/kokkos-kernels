@@ -53,7 +53,7 @@ namespace KokkosSparse {
 namespace Experimental {
 
 // TP2 algorithm has issues with some offset-ordinal combo to be addressed
-enum class SPTRSVAlgorithm { SEQLVLSCHD_RP, SEQLVLSCHD_TP1, SEQLVLSCHED_TP2, CHSEQLVLSCHD_TP1, CHSEQLVLSCHED_TP2 };
+enum class SPTRSVAlgorithm { SEQLVLSCHD_RP, SEQLVLSCHD_TP1, SEQLVLSCHED_TP2, SEQLVLSCHD_TP1CHAIN/*, SEQLVLSCHED_TP2CHAIN*/ };
 // TODO Just added enum labels for "chain" implementations - may need to completely replace the existing algms with these once complete
 
 template <class size_type_, class lno_t_, class scalar_t_,
@@ -101,19 +101,17 @@ public:
 
 private:
 
-  signed_nnz_lno_view_t level_list;
-  nnz_lno_view_t nodes_per_level;
-  nnz_lno_view_t nodes_grouped_by_level;
-
-
   size_type nrows;
-  size_type nlevel;
 
   bool lower_tri;
 
-  bool symbolic_complete;
-
   SPTRSVAlgorithm algm;
+
+  // Symbolic: Level scheduling data
+  signed_nnz_lno_view_t level_list;
+  nnz_lno_view_t nodes_per_level;
+  nnz_lno_view_t nodes_grouped_by_level;
+  size_type nlevel;
 
   int team_size;
   int vector_size;
@@ -121,29 +119,63 @@ private:
   // TODO Store diagonal offsets
   nnz_lno_view_t diagonal_offsets;
 
+  // Symbolic: Single-block chain data
   host_signed_nnz_lno_view_t h_chain_ptr;
   size_type num_chain_entries;
-
   signed_integral_t chain_threshold;
+
+  bool symbolic_complete;
+  bool require_symbolic_lvlsched_phase;
+  bool require_symbolic_chain_phase;
+//  bool symbolic_lvlsched_phase_complete;
+//  bool symbolic_chain_phase_complete;
+
+  void set_if_algm_require_symb_lvlsched () {
+    if (algm == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_RP
+        || algm == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_TP1
+        || algm == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHED_TP2
+        || algm == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_TP1CHAIN
+       ) 
+    {
+      require_symbolic_lvlsched_phase = true;
+    }
+    else {
+      require_symbolic_lvlsched_phase = false;
+    }
+  }
+
+  void set_if_algm_require_symb_chain () {
+    if (algm == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_TP1CHAIN) {
+      require_symbolic_chain_phase = true;
+    }
+    else {
+      require_symbolic_chain_phase = false;
+    }
+  }
 
 public:
 
   SPTRSVHandle(SPTRSVAlgorithm choice, const size_type nrows_, bool lower_tri_, bool symbolic_complete_ = false) :
+    nrows(nrows_),
+    lower_tri(lower_tri_),
+    algm(choice),
     level_list(),
     nodes_per_level(),
     nodes_grouped_by_level(),
-    nrows(nrows_),
     nlevel(0),
-    lower_tri(lower_tri_),
-    symbolic_complete(symbolic_complete_),
-    algm(choice),
     team_size(-1),
     vector_size(-1),
     diagonal_offsets(),
     h_chain_ptr(),
     num_chain_entries(0),
-    chain_threshold(-1)
-  {}
+    chain_threshold(-1),
+    symbolic_complete(symbolic_complete_),
+    require_symbolic_lvlsched_phase(false),
+    require_symbolic_chain_phase(false)
+  {
+    this->set_if_algm_require_symb_lvlsched();
+    this->set_if_algm_require_symb_chain();
+  }
 
 #if 0
   SPTRSVHandle ( SPTRSVAlgorithm choice, const size_type nrows_, bool lower_tri_, bool symbolic_complete_ = false ) :
@@ -199,29 +231,70 @@ public:
 
 #endif
 
-  void reset_handle(const size_type nrows_) {
+  void init_handle(const size_type nrows_) {
     set_nrows(nrows_);
-    set_num_levels(0);
-    level_list = signed_nnz_lno_view_t( Kokkos::ViewAllocateWithoutInitializing("level_list"), nrows_);
-    Kokkos::deep_copy( level_list, signed_integral_t(-1) );
-    nodes_per_level =  nnz_lno_view_t("nodes_per_level", nrows_);
-    nodes_grouped_by_level = nnz_lno_view_t("nodes_grouped_by_level", nrows_);
+    // Assumed that level scheduling occurs during symbolic phase for all algorithms, for now
+    if ( this->require_symbolic_lvlsched_phase == true ) {
+      set_num_levels(0);
+      level_list = signed_nnz_lno_view_t(Kokkos::ViewAllocateWithoutInitializing("level_list"), nrows_);
+      Kokkos::deep_copy( level_list, signed_integral_t(-1) );
+      nodes_per_level =  nnz_lno_view_t("nodes_per_level", nrows_);
+      nodes_grouped_by_level = nnz_lno_view_t("nodes_grouped_by_level", nrows_);
+    }
+
+    // TODO Incorporate usage of this data into the algorithms
     diagonal_offsets = nnz_lno_view_t(Kokkos::ViewAllocateWithoutInitializing("diagonal_offsets"), nrows_);
-    if (get_chain_threshold() > -1) {
-      h_chain_ptr = host_signed_nnz_lno_view_t("h_chain_ptr", nrows_);
+
+    if ( this->require_symbolic_chain_phase == true ) {
+      if (this->chain_threshold == -1) {
+        // Need default if chain_threshold not set
+        // 0: Every level, regardless of number of nodes, is launched within a kernel
+        if (team_size == -1) {
+          this->chain_threshold = 0; 
+          h_chain_ptr = host_signed_nnz_lno_view_t("h_chain_ptr", this->nrows);
+        }
+        else {
+          std::cout << "  Warning: chain_threshold was not set  team_size = " << this->team_size << "  chain_threshold = " << this->chain_threshold << std::endl;
+          this->chain_threshold = this->team_size; 
+          h_chain_ptr = host_signed_nnz_lno_view_t("h_chain_ptr", this->nrows);
+        }
+      }
+      else {
+        // FIXME Compate threshold with team_size limit - either error or automatically adjust if incompatible
+        if (this->team_size >= this->chain_threshold) {
+          h_chain_ptr = host_signed_nnz_lno_view_t("h_chain_ptr", this->nrows);
+        }
+        else if (this->team_size == -1) {
+          std::cout << "  Warning: team_size was not set  team_size = " << this->team_size << "  chain_threshold = " << this->chain_threshold << std::endl;
+          std::cout << "  Automatically setting team_size to chain_threshold - if this exceeds the hardware limitation a runtime error will occur during kernel launch - reduce chain_threshold in that case" << std::endl;
+          this->team_size = this->chain_threshold;
+          h_chain_ptr = host_signed_nnz_lno_view_t("h_chain_ptr", this->nrows);
+        }
+        else {
+          // TODO Must set team_size when using chain - or should it be automatically set to chain_threshold?
+          std::cout << "  Error: team_size = " << this->team_size << "  chain_threshold = " << this->chain_threshold << std::endl;
+          throw std::runtime_error ("  sptrsv_handle.init_handle error: chain_threshold > team_size - this is an invalid pair of values for this algorithm");
+        }
+      }
     }
     else {
       h_chain_ptr = host_signed_nnz_lno_view_t();
+      this->chain_threshold = -1;
     }
     set_num_chain_entries(0);
     set_symbolic_incomplete();
-    use_chain_with_threshold(-1);
   }
 
   virtual ~SPTRSVHandle() {};
 
+  bool algm_requires_symb_lvlsched() const { return require_symbolic_lvlsched_phase; } 
 
-  void set_algorithm(SPTRSVAlgorithm choice) { algm = choice; }
+  bool algm_requires_symb_chain() const { return require_symbolic_chain_phase; }
+
+  // TODO set_algorithm should reset the handle depending on which algms are being switched...
+  void set_algorithm(SPTRSVAlgorithm choice) { 
+    algm = choice; 
+  }
 
   SPTRSVAlgorithm get_algorithm() { return algm; }
 
@@ -261,10 +334,27 @@ public:
   void set_nrows(const size_type nrows_) { this->nrows = nrows_; }
 
 
+  // FIXME This is only interface for setting the chain_threshold for now, but results in unnecessary realloc of h_chain_ptr
   KOKKOS_INLINE_FUNCTION
-  void use_chain_with_threshold(const signed_integral_t threshold) { 
-    this->chain_threshold = threshold; 
-    h_chain_ptr = host_signed_nnz_lno_view_t("h_chain_ptr", this->nrows);
+  void reset_chain_threshold(const signed_integral_t threshold) { 
+    // TODO Must check that team_size corresponding to chain_threshold is valid
+    if (threshold != this->chain_threshold || h_chain_ptr.span() == 0) {
+        this->chain_threshold = threshold;
+        if (this->team_size >= this->chain_threshold) {
+          h_chain_ptr = host_signed_nnz_lno_view_t("h_chain_ptr", this->nrows);
+        }
+        else if (this->team_size == -1) {
+          std::cout << "  Warning: team_size was not set  team_size = " << this->team_size << "  chain_threshold = " << this->chain_threshold << std::endl;
+          std::cout << "  Automatically setting team_size to chain_threshold - if this exceeds the hardware limitation a runtime error will occur during kernel launch - reduce chain_threshold in that case" << std::endl;
+          this->team_size = this->chain_threshold;
+          h_chain_ptr = host_signed_nnz_lno_view_t("h_chain_ptr", this->nrows);
+        }
+        else {
+          // TODO Must set team_size when using chain - or should it be automatically set to chain_threshold?
+          std::cout << "  Error: team_size = " << this->team_size << "  chain_threshold = " << this->chain_threshold << std::endl;
+          throw std::runtime_error ("  sptrsv_handle.init_handle error: chain_threshold > team_size - this is an invalid pair of values for this algorithm");
+        }
+    }
   }
 
   KOKKOS_INLINE_FUNCTION
@@ -305,6 +395,10 @@ public:
       std::cout << "SEQLVLSCHED_TP2" << std::endl;;
       std::cout << "WARNING: With CUDA this is currently only reliable with int-int ordinal-offset pair" << std::endl;
     }
+
+    if ( algm == SPTRSVAlgorithm::SEQLVLSCHD_TP1CHAIN )
+      std::cout << "SEQLVLSCHD_TP1CHAIN" << std::endl;;
+
   }
 
 
@@ -320,15 +414,20 @@ public:
     if ( algm == SPTRSVAlgorithm::SEQLVLSCHED_TP2 ) {
       ret_string = "SEQLVLSCHED_TP2";
     }
+
+    if ( algm == SPTRSVAlgorithm::SEQLVLSCHD_TP1CHAIN )
+      ret_string = "SEQLVLSCHD_TP1CHAIN";
+
     return ret_string;
   }
 
 
   inline SPTRSVAlgorithm StringToSPTRSVAlgorithm(std::string & name) {
-    if(name=="SPTRSV_DEFAULT")             return SPTRSVAlgorithm::SEQLVLSCHD_RP;
-    else if(name=="SPTRSV_RANGEPOLICY")    return SPTRSVAlgorithm::SEQLVLSCHD_RP;
-    else if(name=="SPTRSV_TEAMPOLICY1")    return SPTRSVAlgorithm::SEQLVLSCHD_TP1;
-    else if(name=="SPTRSV_TEAMPOLICY2")    return SPTRSVAlgorithm::SEQLVLSCHED_TP2;
+    if(name=="SPTRSV_DEFAULT")                return SPTRSVAlgorithm::SEQLVLSCHD_RP;
+    else if(name=="SPTRSV_RANGEPOLICY")       return SPTRSVAlgorithm::SEQLVLSCHD_RP;
+    else if(name=="SPTRSV_TEAMPOLICY1")       return SPTRSVAlgorithm::SEQLVLSCHD_TP1;
+    else if(name=="SPTRSV_TEAMPOLICY2")       return SPTRSVAlgorithm::SEQLVLSCHED_TP2;
+    else if(name=="SPTRSV_TEAMPOLICY1CHAIN")  return SPTRSVAlgorithm::SEQLVLSCHD_TP1CHAIN;
     else
       throw std::runtime_error("Invalid SPTRSVAlgorithm name");
   }

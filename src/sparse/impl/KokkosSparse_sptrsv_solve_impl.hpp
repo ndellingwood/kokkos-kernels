@@ -873,16 +873,16 @@ void lower_tri_solve( TriSolveHandle & thandle, const RowMapType row_map, const 
 
 
 template < class TriSolveHandle, class RowMapType, class EntriesType, class ValuesType, class RHSType, class LHSType >
-void tri_solve_chain(TriSolveHandle & thandle, const RowMapType row_map, const EntriesType entries, const ValuesType values, const RHSType & rhs, LHSType &lhs, bool is_lower) {
+void tri_solve_chain(TriSolveHandle & thandle, const RowMapType row_map, const EntriesType entries, const ValuesType values, const RHSType & rhs, LHSType &lhs, const bool is_lower) {
 
   typedef typename TriSolveHandle::execution_space execution_space;
   typedef typename TriSolveHandle::size_type size_type;
   typedef typename TriSolveHandle::nnz_lno_view_t NGBLType;
 
+  // Algorithm is checked before this function is called
   auto h_chain_ptr = thandle.get_host_chain_ptr();
   size_type num_chain_entries = thandle.get_num_chain_entries();
 
-  //auto nlevels = thandle.get_num_levels();
   // Keep this a host View, create device version and copy to back to host during scheduling
   auto nodes_per_level = thandle.get_nodes_per_level();
   auto hnodes_per_level = Kokkos::create_mirror_view(nodes_per_level);
@@ -900,10 +900,8 @@ void tri_solve_chain(TriSolveHandle & thandle, const RowMapType row_map, const E
       std::cout << "Call regular single-link TP - chainlink: " << chainlink << std::endl;
       // run normal algm as this is a single level
       // schain should.... map to the level....
-      if ( thandle.get_algorithm() == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_TP1 ) {
         typedef Kokkos::TeamPolicy<execution_space> policy_type;
         int team_size = thandle.get_team_size();
-        // TODO Check that team_size (if not -1) is valid in Kokkos
 
         size_type lvl_nodes = hnodes_per_level(schain); //lvl == echain????
 
@@ -925,20 +923,16 @@ void tri_solve_chain(TriSolveHandle & thandle, const RowMapType row_map, const E
         // echain is offset into level... ??
         node_count += lvl_nodes;
         std::cout << "  schain: " << schain << "  lvl_nodes: " << lvl_nodes << "  updated node_count: " << node_count << std::endl;
-      }
 
     }
     else {
       std::cout << "Call multi-link single-block TP - chainlink: " << chainlink << std::endl;
       // run single_block algm, pass echain and schain as args
-      if ( thandle.get_algorithm() == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_TP1 ) {
         size_type lvl_nodes = 0;
 
         typedef Kokkos::TeamPolicy<execution_space> policy_type;
         auto cutoff = thandle.get_chain_threshold();
         const int team_size = cutoff;
-        // TODO Add check that team_size and cutoff are compatible - team_size max has various restrictions imposed by hardware etc.
-        // This should be done within the handle, when the cutoff is set? No, need the functor present to check
 //        const int team_size = std::is_same<typename Kokkos::DefaultExecutionSpace::memory_space, Kokkos::HostSpace>::value ? 1 : 256; // TODO chainlink cutoff hard-coded to 256: make this a "threshold" parameter in the handle
 
         if (is_lower) {
@@ -955,7 +949,6 @@ void tri_solve_chain(TriSolveHandle & thandle, const RowMapType row_map, const E
         }
         node_count += lvl_nodes;
         std::cout << "  echain: " << echain << "  lvl_nodes: " << lvl_nodes << "  updated node_count: " << node_count << std::endl;
-      }
 
     } // end else
 

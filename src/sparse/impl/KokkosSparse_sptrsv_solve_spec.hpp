@@ -161,26 +161,28 @@ struct SPTRSV_SOLVE<KernelHandle, RowMapType, EntriesType, ValuesType, BType, XT
       if ( sptrsv_handle->is_symbolic_complete() == false ) {
         Experimental::lower_tri_symbolic(*sptrsv_handle, row_map, entries);
       }
-      auto cutoff_threshold = sptrsv_handle->get_chain_threshold();
-      std::cout << "  lower_tri_solve cutoff: " << cutoff_threshold << std::endl;
-      if (cutoff_threshold == -1) {
-        Experimental::lower_tri_solve( *sptrsv_handle, row_map, entries, values, b, x);
+      if ( sptrsv_handle->get_algorithm() == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_TP1CHAIN ) {
+        std::cout << "CALL tri_solve_chain (l)" << std::endl;
+        auto cutoff_threshold = sptrsv_handle->get_chain_threshold();
+        std::cout << "  lower_tri_solve cutoff: " << cutoff_threshold << std::endl;
+        Experimental::tri_solve_chain( *sptrsv_handle, row_map, entries, values, b, x, true);
       }
       else {
-        Experimental::tri_solve_chain( *sptrsv_handle, row_map, entries, values, b, x, true);
+        Experimental::lower_tri_solve( *sptrsv_handle, row_map, entries, values, b, x);
       }
     }
     else {
       if ( sptrsv_handle->is_symbolic_complete() == false ) {
         Experimental::upper_tri_symbolic(*sptrsv_handle, row_map, entries);
       }
-      auto cutoff_threshold = sptrsv_handle->get_chain_threshold();
-      std::cout << "  lower_tri_solve cutoff: " << cutoff_threshold << std::endl;
-      if (cutoff_threshold == -1) {
-        Experimental::upper_tri_solve( *sptrsv_handle, row_map, entries, values, b, x);
+      if ( sptrsv_handle->get_algorithm() == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_TP1CHAIN ) {
+        std::cout << "CALL tri_solve_chain (u)" << std::endl;
+        auto cutoff_threshold = sptrsv_handle->get_chain_threshold();
+        std::cout << "  upper_tri_solve cutoff: " << cutoff_threshold << std::endl;
+        Experimental::tri_solve_chain( *sptrsv_handle, row_map, entries, values, b, x, false);
       }
       else {
-        Experimental::tri_solve_chain( *sptrsv_handle, row_map, entries, values, b, x, false);
+        Experimental::upper_tri_solve( *sptrsv_handle, row_map, entries, values, b, x);
       }
     }
   }

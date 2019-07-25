@@ -59,13 +59,101 @@ namespace KokkosSparse {
 namespace Impl {
 namespace Experimental {
 
+template < class TriSolveHandle, class NPLViewType >
+void symbolic_chain_phase(TriSolveHandle &thandle, const NPLViewType &nodes_per_level) {
+
+  typedef typename TriSolveHandle::size_type size_type;
+
+  size_type level = thandle.get_num_levels();
+
+  // Create the chain now
+  // TODO Lazy allocation of h_chain_ptr - use num_levels as overestimate (rather than nrows)
+  // TODO What about the host? Execute "single_block" in serial? Or, different team_size?
+  // FIXME Implementations will need to be templated on exec space it seems...
+ auto cutoff_threshold = thandle.get_chain_threshold();
+ std::cout << "SYMB cutoff = " << cutoff_threshold << std::endl;
+ thandle.print_algorithm();
+ //TODO If cutoff is not specified for CHAIN algm, error out
+ //if ( thandle.get_algorithm() == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_TP1CHAIN && cutoff_threshold > -1 ) {
+ if ( thandle.algm_requires_symb_chain() ) {
+  std::cout << "SYMB Call CHAIN version" << std::endl;
+  auto h_chain_ptr = thandle.get_host_chain_ptr();
+  h_chain_ptr(0) = 0;
+  size_type chain_length = 0;
+  size_type num_chain_entries = 0;
+  int update_chain = 0;
+  //const int cutoff = std::is_same<typename Kokkos::DefaultExecutionSpace::memory_space, Kokkos::HostSpace>::value ? 1 : 256; // TODO chain cutoff hard-coded to 256: make this a "threshold" parameter in the handle
+  const int cutoff = cutoff_threshold;
+  std::cout << "cutoff = " << cutoff << std::endl;
+  for ( size_type i = 0; i < level; ++i ) {
+    auto cnpl = nodes_per_level(i);
+    std::cout << "incre chain_length  npl(" << i << ") = " << nodes_per_level(i) << std::endl;
+    if (cnpl <= cutoff) {
+      // this level may be part of a chain passed to the "single_block" solver to reduce kernel launches
+      chain_length += 1;
+    }
+    else {
+      // Too many levels to run on single block...
+      // If first lvl <= cutoff but next level isn't, the two aren't separately updated and info is lost...
+      // if chain_length > 0, take path so that chain-links updated, then current too large chain updated (i.e. 2 updates); if chain_length == 0, then no previous chains and only one update required (npl too large for single-block
+      update_chain = chain_length > 0 ? 2 : 1;
+    }
+
+    // if we hit final level before a trigger to update the chain, than override it - in this case, there was not a larger value to miss cutoff and reset the update
+    if ( update_chain == 0 && i == level-1 ) { update_chain = 1; }
+
+
+    if (update_chain == 1) {
+      num_chain_entries += 1;
+      std::cout << "  nce = " << num_chain_entries << "  chain_length = " << chain_length << std::endl;
+      if (chain_length == 0) {
+        h_chain_ptr(num_chain_entries) = h_chain_ptr(num_chain_entries-1) + 1;
+      }
+      else {
+        h_chain_ptr(num_chain_entries) = h_chain_ptr(num_chain_entries-1) + chain_length;
+      }
+      chain_length = 0; //reset
+      update_chain = 0; //reset
+    }
+
+    // Two updates required - should only occur if chain_length > 0
+    if (update_chain == 2) {
+      if (chain_length == 0) { std::cout << "MAJOR LOGIC ERROR! TERMINATE!" << std::endl; exit(-1); }
+
+      num_chain_entries += 1;
+      h_chain_ptr(num_chain_entries) = h_chain_ptr(num_chain_entries-1) + chain_length;
+      std::cout << "  nce = " << num_chain_entries << "  chain_length = " << chain_length << std::endl;
+
+      num_chain_entries += 1;
+      h_chain_ptr(num_chain_entries) = h_chain_ptr(num_chain_entries-1) + 1;
+
+      chain_length = 0; //reset
+      update_chain = 0; //reset
+    }
+  }
+  thandle.set_num_chain_entries(num_chain_entries);
+  std::cout << "  num_chain_entries = " << thandle.get_num_chain_entries() << std::endl;
+  for ( size_type i = 0; i < num_chain_entries+1; ++i )
+  {
+    std::cout << "chain_ptr(" << i << "): " << h_chain_ptr(i) << std::endl;
+  }
+ }
+  // Usage:
+  // for c in [0, num_chain_entries)
+  //   s = h_chain_ptr(c); e = h_chain_ptr(c+1);
+  //   num_levels_in_current_chain = e - s;
+  //   if nlicc > 256
+  //     call current_alg
+  //   else
+  //     call single_block(s,e)
+
+} // end symbolic_chain_phase
+
 
 template < class TriSolveHandle, class RowMapType, class EntriesType >
 void lower_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, const EntriesType dentries) {
 
- if ( thandle.get_algorithm() == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_RP ||
-      thandle.get_algorithm() == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_TP1
-   || thandle.get_algorithm() == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHED_TP2 )
+ if ( thandle.algm_requires_symb_lvlsched() )
  {
   // Scheduling currently compute on host - need host copy of all views
 
@@ -162,80 +250,9 @@ void lower_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, co
   thandle.set_num_levels(level);
 
   // Create the chain now
-  // TODO Lazy allocation of h_chain_ptr - use num_levels as overestimate (rather than nrows)
-  // TODO What about the host? Execute "single_block" in serial? Or, different team_size?
-  // FIXME Implementations will need to be templated on exec space it seems...
-  auto cutoff_threshold = thandle.get_chain_threshold();
- if (cutoff_threshold > -1) {
-  auto h_chain_ptr = thandle.get_host_chain_ptr();
-  h_chain_ptr(0) = 0;
-  size_type chain_length = 0;
-  size_type num_chain_entries = 0;
-  int update_chain = 0;
-  //const int cutoff = std::is_same<typename Kokkos::DefaultExecutionSpace::memory_space, Kokkos::HostSpace>::value ? 1 : 256; // TODO chain cutoff hard-coded to 256: make this a "threshold" parameter in the handle
-  const int cutoff = cutoff_threshold;
-  std::cout << "cutoff = " << cutoff << std::endl;
-  for ( size_type i = 0; i < level; ++i ) {
-    auto cnpl = nodes_per_level(i);
-    std::cout << "incre chain_length  npl(" << i << ") = " << nodes_per_level(i) << std::endl;
-    if (cnpl <= cutoff) {
-      // this level may be part of a chain passed to the "single_block" solver to reduce kernel launches
-      chain_length += 1;
-    }
-    else {
-      // Too many levels to run on single block...
-      // If first lvl <= cutoff but next level isn't, the two aren't separately updated and info is lost...
-      // if chain_length > 0, take path so that chain-links updated, then current too large chain updated (i.e. 2 updates); if chain_length == 0, then no previous chains and only one update required (npl too large for single-block
-      update_chain = chain_length > 0 ? 2 : 1;
-    }
-
-    // if we hit final level before a trigger to update the chain, than override it - in this case, there was not a larger value to miss cutoff and reset the update
-    if ( update_chain == 0 && i == level-1 ) { update_chain = 1; }
-
-
-    if (update_chain == 1) {
-      num_chain_entries += 1;
-      std::cout << "  nce = " << num_chain_entries << "  chain_length = " << chain_length << std::endl;
-      if (chain_length == 0) {
-        h_chain_ptr(num_chain_entries) = h_chain_ptr(num_chain_entries-1) + 1;
-      }
-      else {
-        h_chain_ptr(num_chain_entries) = h_chain_ptr(num_chain_entries-1) + chain_length;
-      }
-      chain_length = 0; //reset
-      update_chain = 0; //reset
-    }
-
-    // Two updates required - should only occur if chain_length > 0
-    if (update_chain == 2) {
-      if (chain_length == 0) { std::cout << "MAJOR LOGIC ERROR! TERMINATE!" << std::endl; exit(-1); }
-
-      num_chain_entries += 1;
-      h_chain_ptr(num_chain_entries) = h_chain_ptr(num_chain_entries-1) + chain_length;
-      std::cout << "  nce = " << num_chain_entries << "  chain_length = " << chain_length << std::endl;
-
-      num_chain_entries += 1;
-      h_chain_ptr(num_chain_entries) = h_chain_ptr(num_chain_entries-1) + 1;
-
-      chain_length = 0; //reset
-      update_chain = 0; //reset
-    }
-  }
-  thandle.set_num_chain_entries(num_chain_entries);
-  std::cout << "  num_chain_entries = " << thandle.get_num_chain_entries() << std::endl;
-  for ( size_type i = 0; i < num_chain_entries+1; ++i )
-  {
-    std::cout << "chain_ptr(" << i << "): " << h_chain_ptr(i) << std::endl;
-  }
+ if ( thandle.algm_requires_symb_chain() ) {
+   symbolic_chain_phase(thandle, nodes_per_level);
  }
-  // Usage:
-  // for c in [0, num_chain_entries)
-  //   s = h_chain_ptr(c); e = h_chain_ptr(c+1);
-  //   num_levels_in_current_chain = e - s;
-  //   if nlicc > 256
-  //     call current_alg
-  //   else
-  //     call single_block(s,e)
 
   // Output check
 #ifdef LVL_OUTPUT_INFO
@@ -258,15 +275,13 @@ void lower_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, co
   Kokkos::deep_copy(dlevel_list, level_list);
   Kokkos::deep_copy(diagonal_offsets, hdiagonal_offsets);
  }
-} // end lowertri_level_sched
+} // end lower_tri_symbolic
 
 
 template < class TriSolveHandle, class RowMapType, class EntriesType >
 void upper_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, const EntriesType dentries ) {
 
- if ( thandle.get_algorithm() == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_RP ||
-      thandle.get_algorithm() == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_TP1
-   || thandle.get_algorithm() == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHED_TP2 )
+ if ( thandle.algm_requires_symb_lvlsched() )
  {
   // Scheduling currently compute on host - need host copy of all views
 
@@ -363,80 +378,9 @@ void upper_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, co
   thandle.set_num_levels(level);
 
   // Create the chain now
-  // TODO Lazy allocation of h_chain_ptr - use num_levels as overestimate (rather than nrows)
-  // TODO What about the host? Execute "single_block" in serial? Or, different team_size?
-  // FIXME Implementations will need to be templated on exec space it seems...
-  auto cutoff_threshold = thandle.get_chain_threshold();
- if (cutoff_threshold > -1) {
-  auto h_chain_ptr = thandle.get_host_chain_ptr();
-  h_chain_ptr(0) = 0;
-  size_type chain_length = 0;
-  size_type num_chain_entries = 0;
-  int update_chain = 0;
-  //const int cutoff = std::is_same<typename Kokkos::DefaultExecutionSpace::memory_space, Kokkos::HostSpace>::value ? 1 : 256; // TODO chain cutoff hard-coded to 256: make this a "threshold" parameter in the handle
-  const int cutoff = cutoff_threshold;
-  std::cout << "cutoff = " << cutoff << std::endl;
-  for ( size_type i = 0; i < level; ++i ) {
-    auto cnpl = nodes_per_level(i);
-    std::cout << "incre chain_length  npl(" << i << ") = " << nodes_per_level(i) << std::endl;
-    if (cnpl <= cutoff) {
-      // this level may be part of a chain passed to the "single_block" solver to reduce kernel launches
-      chain_length += 1;
-    }
-    else {
-      // Too many levels to run on single block...
-      // If first lvl <= cutoff but next level isn't, the two aren't separately updated and info is lost...
-      // if chain_length > 0, take path so that chain-links updated, then current too large chain updated (i.e. 2 updates); if chain_length == 0, then no previous chains and only one update required (npl too large for single-block
-      update_chain = chain_length > 0 ? 2 : 1;
-    }
-
-    // if we hit final level before a trigger to update the chain, than override it - in this case, there was not a larger value to miss cutoff and reset the update
-    if ( update_chain == 0 && i == level-1 ) { update_chain = 1; }
-
-
-    if (update_chain == 1) {
-      num_chain_entries += 1;
-      std::cout << "  nce = " << num_chain_entries << "  chain_length = " << chain_length << std::endl;
-      if (chain_length == 0) {
-        h_chain_ptr(num_chain_entries) = h_chain_ptr(num_chain_entries-1) + 1;
-      }
-      else {
-        h_chain_ptr(num_chain_entries) = h_chain_ptr(num_chain_entries-1) + chain_length;
-      }
-      chain_length = 0; //reset
-      update_chain = 0; //reset
-    }
-
-    // Two updates required - should only occur if chain_length > 0
-    if (update_chain == 2) {
-      if (chain_length == 0) { std::cout << "MAJOR LOGIC ERROR! TERMINATE!" << std::endl; exit(-1); }
-
-      num_chain_entries += 1;
-      h_chain_ptr(num_chain_entries) = h_chain_ptr(num_chain_entries-1) + chain_length;
-      std::cout << "  nce = " << num_chain_entries << "  chain_length = " << chain_length << std::endl;
-
-      num_chain_entries += 1;
-      h_chain_ptr(num_chain_entries) = h_chain_ptr(num_chain_entries-1) + 1;
-
-      chain_length = 0; //reset
-      update_chain = 0; //reset
-    }
-  }
-  thandle.set_num_chain_entries(num_chain_entries);
-  std::cout << "  num_chain_entries = " << thandle.get_num_chain_entries() << std::endl;
-  for ( size_type i = 0; i < num_chain_entries+1; ++i )
-  {
-    std::cout << "chain_ptr(" << i << "): " << h_chain_ptr(i) << std::endl;
-  }
+ if ( thandle.algm_requires_symb_chain() ) {
+   symbolic_chain_phase(thandle, nodes_per_level);
  }
-  // Usage:
-  // for c in [0, num_chain_entries)
-  //   s = h_chain_ptr(c); e = h_chain_ptr(c+1);
-  //   num_levels_in_current_chain = e - s;
-  //   if nlicc > 256
-  //     call current alg
-  //   else
-  //     call single_block(s,e)
 
   // Output check
 #ifdef LVL_OUTPUT_INFO
@@ -459,7 +403,7 @@ void upper_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, co
   Kokkos::deep_copy(dlevel_list, level_list);
   Kokkos::deep_copy(diagonal_offsets, hdiagonal_offsets);
  }
-} // end uppertri_level_sched
+} // end upper_tri_symbolic
 
 
 

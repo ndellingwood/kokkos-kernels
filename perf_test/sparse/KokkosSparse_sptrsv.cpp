@@ -192,9 +192,9 @@ int test_sptrsv_perf(std::vector<int> tests, std::string& lfilename, std::string
         break;
       case LVLSCHED_TP1CHAIN:
         printf("TP1 with CHAIN\n");
-        kh.create_sptrsv_handle(SPTRSVAlgorithm::SEQLVLSCHD_TP1, nrows, is_lower_tri);
+        kh.create_sptrsv_handle(SPTRSVAlgorithm::SEQLVLSCHD_TP1CHAIN, nrows, is_lower_tri);
         //const int thresh = 1;
-        kh.get_sptrsv_handle()->use_chain_with_threshold(1);
+        kh.get_sptrsv_handle()->reset_chain_threshold(1);
         kh.get_sptrsv_handle()->print_algorithm();
         break;
 /*
@@ -436,9 +436,9 @@ int test_sptrsv_perf(std::vector<int> tests, std::string& lfilename, std::string
         break;
       case LVLSCHED_TP1CHAIN:
         printf("TP1 with CHAIN\n");
-        kh.create_sptrsv_handle(SPTRSVAlgorithm::SEQLVLSCHD_TP1, nrows, is_lower_tri);
+        kh.create_sptrsv_handle(SPTRSVAlgorithm::SEQLVLSCHD_TP1CHAIN, nrows, is_lower_tri);
         //const int thresh = 1;
-        kh.get_sptrsv_handle()->use_chain_with_threshold(1);
+        kh.get_sptrsv_handle()->reset_chain_threshold(1);
         kh.get_sptrsv_handle()->print_algorithm();
         break;
 /*
