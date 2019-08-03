@@ -194,7 +194,7 @@ int test_sptrsv_perf(std::vector<int> tests, std::string& lfilename, std::string
         printf("TP1 with CHAIN\n");
         kh.create_sptrsv_handle(SPTRSVAlgorithm::SEQLVLSCHD_TP1CHAIN, nrows, is_lower_tri);
         //const int thresh = 1;
-        kh.get_sptrsv_handle()->reset_chain_threshold(1);
+        kh.get_sptrsv_handle()->reset_chain_threshold(2);
         kh.get_sptrsv_handle()->print_algorithm();
         break;
 /*
@@ -438,7 +438,7 @@ int test_sptrsv_perf(std::vector<int> tests, std::string& lfilename, std::string
         printf("TP1 with CHAIN\n");
         kh.create_sptrsv_handle(SPTRSVAlgorithm::SEQLVLSCHD_TP1CHAIN, nrows, is_lower_tri);
         //const int thresh = 1;
-        kh.get_sptrsv_handle()->reset_chain_threshold(1);
+        kh.get_sptrsv_handle()->reset_chain_threshold(2);
         kh.get_sptrsv_handle()->print_algorithm();
         break;
 /*
@@ -705,6 +705,7 @@ int main(int argc, char **argv)
 }
 #else
 int main() {
+  std::cout << "KokkosSparse_sptrsv: This perf_test will do nothing when Cuda is enabled without lambda support." << std::endl;
   return 0;
 }
 #endif
