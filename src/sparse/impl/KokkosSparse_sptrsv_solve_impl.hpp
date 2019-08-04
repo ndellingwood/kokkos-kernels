@@ -52,6 +52,7 @@
 #include <KokkosSparse_sptrsv_handle.hpp>
 
 //#define LVL_OUTPUT_INFO
+//#define CHAIN_DEBUG_OUTPUT
 
 namespace KokkosSparse {
 namespace Impl {
@@ -578,96 +579,61 @@ struct LowerTriLvlSchedTP1SingleBlockFunctor
   KOKKOS_INLINE_FUNCTION
   void operator()( const member_type & team ) const {
     long mut_node_count = node_count;
-    printf("league_rank: %d  team_rank: %d  node_count: %ld  lvl_start: %ld  lvl_end: %ld\n", team.league_rank(), team.team_rank(), mut_node_count, lvl_start, lvl_end);
     for ( auto lvl = lvl_start; lvl < lvl_end; ++lvl ) {
       auto nodes_this_lvl = nodes_per_level(lvl);
-//      int my_rank = team.team_rank();
+      int my_rank = team.team_rank();
+#ifdef CHAIN_DEBUG_OUTPUT
       printf("league_rank: %d  team_rank: %d  lvl: %ld  nodes_this_lvl: %ld\n", team.league_rank(), team.team_rank(), lvl, (long)nodes_this_lvl);
+#endif
       typename NGBLType::non_const_value_type rowid {0};
       typename RowMapType::non_const_value_type soffset {0};
       typename RowMapType::non_const_value_type eoffset {0};
       typename RHSType::non_const_value_type rhs_val {0};
       scalar_t diff = scalar_t(0.0);
-      if (team.team_rank() < nodes_this_lvl) {
 
-        //auto rowid = nodes_grouped_by_level(team.team_rank() + mut_node_count);
+      if (my_rank < nodes_this_lvl) {
+
         // THIS is where the mapping of threadid to rowid happens
-        rowid = nodes_grouped_by_level(team.team_rank() + mut_node_count);
+        rowid = nodes_grouped_by_level(my_rank + mut_node_count);
 
         soffset = row_map(rowid);
         eoffset = row_map(rowid+1);
         rhs_val = rhs(rowid);
-        //scalar_t diff = scalar_t(0.0);
+#ifdef CHAIN_DEBUG_OUTPUT
+        printf("league_rank: %d  team_rank: %d  node_count: %ld  lvl_start: %ld  lvl_end: %ld\n", team.league_rank(), team.team_rank(), mut_node_count, lvl_start, lvl_end);
+        printf("  team_rank: %d  mut_node_count: %ld  ngbl: %ld\n", team.team_rank(), mut_node_count, (long)rowid);
         printf("  team_rank passed if: %d  rowid: %d  soffset: %d  eoffset: %d  rhs_val: %lf\n", team.team_rank(), (int)rowid, (int)soffset, (int)eoffset, rhs_val);
+#endif
 
 // FIXME NOTES:
 // Assumptions: 1. Each "thread" owns a row in the level
 //              2. At this point, the nested parallel_reduce is acting over all threads within the team!!!!! This is the bug in nt > 1 case.
 // FIX:
 //              Replace TeamThreadRange (which is allowing threads to cooperate over the solve...) with the TeamVectorRange
+// Round 2: Use TeamVectorRange Policy
 
         for (auto ptr = soffset; ptr < eoffset; ++ptr) {
           auto colid = entries(ptr);
           auto val   = values(ptr);
+#ifdef CHAIN_DEBUG_OUTPUT
           printf("  ptr: %d  colid: %d  val: %lf  rank: %d\n", (int)ptr, (int)colid, val, team.team_rank());
+#endif
           if ( colid != rowid ) {
             diff -= val*lhs(colid);
           }
         }
+        // ASSUMPTION: sorted diagonal value located at eoffset - 1
         lhs(rowid) = (rhs_val+diff)/values(eoffset-1);
 
       } // end if team.team_rank() < nodes_this_lvl
-      //team.team_barrier();
-
-        // At end, finalize rowid == colid
-        // only one thread should do this; can also use Kokkos::single
-      team.team_barrier();
-//        if ( team.team_rank() == 0 )
-        {
-        // ASSUMPTION: sorted diagonal value located at eoffset - 1
-          // Update mut_node_count from nodes_per_level(lvl) each iteration of lvl
-          mut_node_count += nodes_this_lvl;
-        }
+      {
+        // Update mut_node_count from nodes_per_level(lvl) each iteration of lvl per thread
+        mut_node_count += nodes_this_lvl;
+      }
       team.team_barrier();
     } // end for lvl
   } // end operator
 
-#if 0
-  KOKKOS_INLINE_FUNCTION
-  void operator()(const UnsortedTag&, const member_type & team) const {
-        auto my_league = team.league_rank(); // map to rowid
-        auto rowid = nodes_grouped_by_level(my_league + node_count);
-        auto my_rank = team.team_rank();
-
-        auto soffset = row_map(rowid);
-        auto eoffset = row_map(rowid+1);
-        auto rhs_rowid = rhs(rowid);
-        scalar_t diff = scalar_t(0.0);
-
-        auto diag = -1;
-
-        Kokkos::parallel_reduce( Kokkos::TeamThreadRange( team, soffset, eoffset ), [&] ( const long ptr, scalar_t &tdiff ) {
-          auto colid = entries(ptr);
-          auto val   = values(ptr);
-          if ( colid != rowid ) {
-            tdiff = tdiff - val*lhs(colid);
-          }
-          else {
-            diag = ptr;
-          }
-        }, diff );
-
-        team.team_barrier();
-
-        // At end, finalize rowid == colid
-        // only one thread should do this; can also use Kokkos::single
-        if ( my_rank == 0 )
-        {
-        // ASSUMPTION: sorted diagonal value located at eoffset - 1
-          lhs(rowid) = (rhs_rowid+diff)/values(diag);
-        }
-  } // end operator tag
-#endif
 };
 
 template <class RowMapType, class EntriesType, class ValuesType, class LHSType, class RHSType, class NGBLType>
@@ -701,119 +667,60 @@ struct UpperTriLvlSchedTP1SingleBlockFunctor
   KOKKOS_INLINE_FUNCTION
   void operator()( const member_type & team ) const {
     long mut_node_count = node_count;
-    printf("league_rank: %d  team_rank: %d  node_count: %ld  lvl_start: %ld  lvl_end: %ld\n", team.league_rank(), team.team_rank(), mut_node_count, lvl_start, lvl_end);
     for ( auto lvl = lvl_start; lvl < lvl_end; ++lvl ) {
       auto nodes_this_lvl = nodes_per_level(lvl);
-//      int my_rank = team.team_rank();
+      int my_rank = team.team_rank();
+#ifdef CHAIN_DEBUG_OUTPUT
       printf("league_rank: %d  team_rank: %d  lvl: %ld  nodes_this_lvl: %ld\n", team.league_rank(), team.team_rank(), lvl, (long)nodes_this_lvl);
+#endif
       typename NGBLType::non_const_value_type rowid {0};
       typename RowMapType::non_const_value_type soffset {0};
       typename RowMapType::non_const_value_type eoffset {0};
       typename RHSType::non_const_value_type rhs_val {0};
       scalar_t diff = scalar_t(0.0);
-      if (team.team_rank() < nodes_this_lvl) {
 
-        rowid = nodes_grouped_by_level(team.team_rank() + mut_node_count);
-        printf("  team_rank: %d  mut_node_count: %ld  ngbl: %ld\n", team.team_rank(), mut_node_count, (long)rowid);
+      if (my_rank < nodes_this_lvl) {
+
+        // THIS is where the mapping of threadid to rowid happens
+        rowid = nodes_grouped_by_level(my_rank + mut_node_count);
 
         soffset = row_map(rowid);
         eoffset = row_map(rowid+1);
         rhs_val = rhs(rowid);
+#ifdef CHAIN_DEBUG_OUTPUT
+        printf("league_rank: %d  team_rank: %d  node_count: %ld  lvl_start: %ld  lvl_end: %ld\n", team.league_rank(), team.team_rank(), mut_node_count, lvl_start, lvl_end);
+        printf("  team_rank: %d  mut_node_count: %ld  ngbl: %ld\n", team.team_rank(), mut_node_count, (long)rowid);
         printf("  team_rank passed if: %d  rowid: %d  soffset: %d  eoffset: %d  rhs_val: %lf\n", team.team_rank(), (int)rowid, (int)soffset, (int)eoffset, rhs_val);
-        //scalar_t diff = scalar_t(0.0);
+#endif
+
+// FIXME NOTES:
+// Assumptions: 1. Each "thread" owns a row in the level
+//              2. At this point, the nested parallel_reduce is acting over all threads within the team!!!!! This is the bug in nt > 1 case.
+// FIX:
+//              Replace TeamThreadRange (which is allowing threads to cooperate over the solve...) with the TeamVectorRange
+// Round 2: Use TeamVectorRange Policy
 
         for (auto ptr = soffset; ptr < eoffset; ++ptr) {
           auto colid = entries(ptr);
           auto val   = values(ptr);
+#ifdef CHAIN_DEBUG_OUTPUT
           printf("  ptr: %d  colid: %d  val: %lf  rank: %d\n", (int)ptr, (int)colid, val, team.team_rank());
+#endif
           if ( colid != rowid ) {
             diff -= val*lhs(colid);
           }
         }
+        // ASSUMPTION: sorted diagonal value located at soffset
         lhs(rowid) = (rhs_val+diff)/values(soffset);
 
       } // end if
-      //team.team_barrier();
-        // At end, finalize rowid == colid
-        // only one thread should do this; can also use Kokkos::single
-      team.team_barrier();
-//        if ( team.team_rank() == 0 )
-        {
-        // ASSUMPTION: sorted diagonal value located at soffset
-          // Update mut_node_count from nodes_per_level(lvl) each iteration of lvl
-          mut_node_count += nodes_this_lvl;
-        }
+      {
+        // Update mut_node_count from nodes_per_level(lvl) each iteration of lvl each thread
+        mut_node_count += nodes_this_lvl;
+      }
       team.team_barrier();
     } // end for lvl
   } // end operator
-
-#if 0
-  //upper
-  KOKKOS_INLINE_FUNCTION
-  void operator()(const member_type & team) const {
-        auto my_league = team.league_rank(); // map to rowid
-        auto rowid = nodes_grouped_by_level(my_league + node_count);
-        auto my_rank = team.team_rank();
-
-        auto soffset = row_map(rowid);
-        auto eoffset = row_map(rowid+1);
-        auto rhs_rowid = rhs(rowid);
-        scalar_t diff = scalar_t(0.0);
-
-        Kokkos::parallel_reduce( Kokkos::TeamThreadRange( team, soffset, eoffset ), [&] ( const long ptr, scalar_t &tdiff ) {
-          auto colid = entries(ptr);
-          auto val   = values(ptr);
-          if ( colid != rowid ) {
-            tdiff = tdiff - val*lhs(colid);
-          }
-        }, diff );
-
-        team.team_barrier();
-
-        // At end, finalize rowid == colid
-        // only one thread should do this, also can use Kokkos::single
-        if ( my_rank == 0 )
-        {
-        // ASSUMPTION: sorted diagonal value located at start offset
-          lhs(rowid) = (rhs_rowid+diff)/values(soffset);
-        }
-  }
-  //lower
-  KOKKOS_INLINE_FUNCTION
-  void operator()(const UnsortedTag&, const member_type & team) const {
-        auto my_league = team.league_rank(); // map to rowid
-        auto rowid = nodes_grouped_by_level(my_league + node_count);
-        auto my_rank = team.team_rank();
-
-        auto soffset = row_map(rowid);
-        auto eoffset = row_map(rowid+1);
-        auto rhs_rowid = rhs(rowid);
-        scalar_t diff = scalar_t(0.0);
-
-        auto diag = -1;
-
-        Kokkos::parallel_reduce( Kokkos::TeamThreadRange( team, soffset, eoffset ), [&] ( const long ptr, scalar_t &tdiff ) {
-          auto colid = entries(ptr);
-          auto val   = values(ptr);
-          if ( colid != rowid ) {
-            tdiff = tdiff - val*lhs(colid);
-          }
-          else {
-            diag = ptr;
-          }
-        }, diff );
-
-        team.team_barrier();
-
-        // At end, finalize rowid == colid
-        // only one thread should do this; can also use Kokkos::single
-        if ( my_rank == 0 )
-        {
-        // ASSUMPTION: sorted diagonal value located at eoffset - 1
-          lhs(rowid) = (rhs_rowid+diff)/values(diag);
-        }
-  } // end operator tag
-#endif
 };
 
 // --------------------------------
@@ -912,7 +819,7 @@ void tri_solve_chain(TriSolveHandle & thandle, const RowMapType row_map, const E
     size_type echain = h_chain_ptr(chainlink+1);
 
     if ( echain - schain == 1 ) {
-      std::cout << "Call regular single-link TP - chainlink: " << chainlink << std::endl;
+      //std::cout << "Call regular single-link TP - chainlink: " << chainlink << std::endl;
       // run normal algm as this is a single level
       // schain should.... map to the level....
         typedef Kokkos::TeamPolicy<execution_space> policy_type;
@@ -923,25 +830,25 @@ void tri_solve_chain(TriSolveHandle & thandle, const RowMapType row_map, const E
         if (is_lower) {
           LowerTriLvlSchedTP1SolverFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, node_count);
           if ( team_size == -1 )
-            Kokkos::parallel_for("parfor_l_team_chain1", policy_type( lvl_nodes , Kokkos::AUTO ), tstf);
+            Kokkos::parallel_for("parfor_l_team_chain1auto", policy_type( lvl_nodes , Kokkos::AUTO ), tstf);
           else
             Kokkos::parallel_for("parfor_l_team_chain1", policy_type( lvl_nodes , team_size ), tstf);
         }
         else {
           UpperTriLvlSchedTP1SolverFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, node_count);
           if ( team_size == -1 )
-            Kokkos::parallel_for("parfor_u_team_chain1", policy_type( lvl_nodes , Kokkos::AUTO ), tstf);
+            Kokkos::parallel_for("parfor_u_team_chain1auto", policy_type( lvl_nodes , Kokkos::AUTO ), tstf);
           else
             Kokkos::parallel_for("parfor_u_team_chain1", policy_type( lvl_nodes , team_size ), tstf);
         }
 
         // echain is offset into level... ??
         node_count += lvl_nodes;
-        std::cout << "  schain: " << schain << "  lvl_nodes: " << lvl_nodes << "  updated node_count: " << node_count << std::endl;
+        //std::cout << "  schain: " << schain << "  lvl_nodes: " << lvl_nodes << "  updated node_count: " << node_count << std::endl;
 
     }
     else {
-      std::cout << "Call multi-link single-block TP - chainlink: " << chainlink << std::endl;
+      //std::cout << "Call multi-link single-block TP - chainlink: " << chainlink << std::endl;
       // run single_block algm, pass echain and schain as args
         size_type lvl_nodes = 0;
 
@@ -950,7 +857,6 @@ void tri_solve_chain(TriSolveHandle & thandle, const RowMapType row_map, const E
         const int team_size = cutoff;
 //        const int team_size = std::is_same<typename Kokkos::DefaultExecutionSpace::memory_space, Kokkos::HostSpace>::value ? 1 : 256; // TODO chainlink cutoff hard-coded to 256: make this a "threshold" parameter in the handle
 
-        std::cout << "  node_count: " << node_count << "  team_size: " << team_size << std::endl;
         if (is_lower) {
           LowerTriLvlSchedTP1SingleBlockFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, nodes_per_level, node_count, schain, echain);
           Kokkos::parallel_for("parfor_l_team_chainmulti", policy_type( 1, team_size ), tstf);
@@ -964,7 +870,7 @@ void tri_solve_chain(TriSolveHandle & thandle, const RowMapType row_map, const E
           lvl_nodes += hnodes_per_level(i);
         }
         node_count += lvl_nodes;
-        std::cout << "  echain: " << echain << "  lvl_nodes: " << lvl_nodes << "  updated node_count: " << node_count << std::endl;
+        //std::cout << "  echain: " << echain << "  lvl_nodes: " << lvl_nodes << "  updated node_count: " << node_count << std::endl;
 
     } // end else
 

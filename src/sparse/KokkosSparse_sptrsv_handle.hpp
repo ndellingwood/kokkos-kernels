@@ -261,7 +261,7 @@ public:
     // TODO Incorporate usage of this data into the algorithms
     diagonal_offsets = nnz_lno_view_t(Kokkos::ViewAllocateWithoutInitializing("diagonal_offsets"), nrows_);
 
-    if ( this->require_symbolic_chain_phase == true ) {
+    if (this->require_symbolic_chain_phase == true) {
       if (this->chain_threshold == -1) {
         // Need default if chain_threshold not set
         // 0: Every level, regardless of number of nodes, is launched within a kernel
@@ -270,7 +270,7 @@ public:
           h_chain_ptr = host_signed_nnz_lno_view_t("h_chain_ptr", this->nrows);
         }
         else {
-          std::cout << "  Warning: chain_threshold was not set  team_size = " << this->team_size << "  chain_threshold = " << this->chain_threshold << std::endl;
+          std::cout << "  Warning: chain_threshold was not set - will default to team_size = " << this->team_size << "  chain_threshold = " << this->chain_threshold << std::endl;
           this->chain_threshold = this->team_size; 
           h_chain_ptr = host_signed_nnz_lno_view_t("h_chain_ptr", this->nrows);
         }
@@ -308,6 +308,7 @@ public:
   bool algm_requires_symb_chain() const { return require_symbolic_chain_phase; }
 
   // TODO set_algorithm should reset the handle depending on which algms are being switched...
+  // i.e. "Compatible algorithms"
   void set_algorithm(SPTRSVAlgorithm choice) { 
     algm = choice; 
   }
@@ -319,6 +320,7 @@ public:
     }
   }
 
+  KOKKOS_INLINE_FUNCTION
   SPTRSVAlgorithm get_algorithm() { return algm; }
 
   KOKKOS_INLINE_FUNCTION

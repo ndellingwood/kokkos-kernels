@@ -69,7 +69,6 @@ void symbolic_chain_phase(TriSolveHandle &thandle, const NPLViewType &nodes_per_
   // Create the chain now
   // FIXME Implementations will need to be templated on exec space it seems...
  auto cutoff_threshold = thandle.get_chain_threshold();
- std::cout << "SYMB cutoff = " << cutoff_threshold << std::endl;
  thandle.print_algorithm();
  if ( thandle.algm_requires_symb_chain() ) {
   std::cout << "SYMB Call CHAIN version" << std::endl;
@@ -80,10 +79,9 @@ void symbolic_chain_phase(TriSolveHandle &thandle, const NPLViewType &nodes_per_
   int update_chain = 0;
   //const int cutoff = std::is_same<typename Kokkos::DefaultExecutionSpace::memory_space, Kokkos::HostSpace>::value ? 1 : 256; // TODO chain cutoff hard-coded to 256: make this a "threshold" parameter in the handle
   const int cutoff = cutoff_threshold;
-  std::cout << "cutoff = " << cutoff << std::endl;
   for ( size_type i = 0; i < level; ++i ) {
     auto cnpl = nodes_per_level(i);
-    std::cout << "incre chain_length  npl(" << i << ") = " << nodes_per_level(i) << std::endl;
+    //std::cout << "incre chain_length  npl(" << i << ") = " << nodes_per_level(i) << std::endl;
     if (cnpl <= cutoff) {
       // this level may be part of a chain passed to the "single_block" solver to reduce kernel launches
       chain_length += 1;
@@ -101,7 +99,7 @@ void symbolic_chain_phase(TriSolveHandle &thandle, const NPLViewType &nodes_per_
 
     if (update_chain == 1) {
       num_chain_entries += 1;
-      std::cout << "  nce = " << num_chain_entries << "  chain_length = " << chain_length << std::endl;
+      //std::cout << "  nce = " << num_chain_entries << "  chain_length = " << chain_length << std::endl;
       if (chain_length == 0) {
         h_chain_ptr(num_chain_entries) = h_chain_ptr(num_chain_entries-1) + 1;
       }
@@ -118,7 +116,7 @@ void symbolic_chain_phase(TriSolveHandle &thandle, const NPLViewType &nodes_per_
 
       num_chain_entries += 1;
       h_chain_ptr(num_chain_entries) = h_chain_ptr(num_chain_entries-1) + chain_length;
-      std::cout << "  nce = " << num_chain_entries << "  chain_length = " << chain_length << std::endl;
+      //std::cout << "  nce = " << num_chain_entries << "  chain_length = " << chain_length << std::endl;
 
       num_chain_entries += 1;
       h_chain_ptr(num_chain_entries) = h_chain_ptr(num_chain_entries-1) + 1;
@@ -128,11 +126,13 @@ void symbolic_chain_phase(TriSolveHandle &thandle, const NPLViewType &nodes_per_
     }
   }
   thandle.set_num_chain_entries(num_chain_entries);
+#ifdef LVL_OUTPUT_INFO
   std::cout << "  num_chain_entries = " << thandle.get_num_chain_entries() << std::endl;
   for ( size_type i = 0; i < num_chain_entries+1; ++i )
   {
     std::cout << "chain_ptr(" << i << "): " << h_chain_ptr(i) << std::endl;
   }
+#endif
  }
   // Usage:
   // for c in [0, num_chain_entries)
