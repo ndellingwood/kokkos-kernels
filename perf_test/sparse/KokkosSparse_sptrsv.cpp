@@ -74,7 +74,7 @@ enum {DEFAULT, CUSPARSE, LVLSCHED_RP, LVLSCHED_TP1, LVLSCHED_TP2, LVLSCHED_TP1CH
 
 
 template<typename Scalar>
-int test_sptrsv_perf(std::vector<int> tests, std::string& lfilename, std::string& ufilename, int team_size, int vector_length, int idx_offset, int loop) {
+int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const std::string& ufilename, const int team_size, const int vector_length, const int idx_offset, const int loop, const int chain_threshold = 0) {
 
   typedef Scalar scalar_t;
   typedef int lno_t;
@@ -90,8 +90,8 @@ int test_sptrsv_perf(std::vector<int> tests, std::string& lfilename, std::string
   typedef KokkosKernels::Experimental::KokkosKernelsHandle <size_type, lno_t, scalar_t,
     execution_space, memory_space, memory_space > KernelHandle;
 
-  scalar_t ZERO = scalar_t(0);
-  scalar_t ONE = scalar_t(1);
+  const scalar_t ZERO = scalar_t(0);
+  const scalar_t ONE  = scalar_t(1);
 
 
 // Read lmtx
@@ -192,9 +192,9 @@ int test_sptrsv_perf(std::vector<int> tests, std::string& lfilename, std::string
         break;
       case LVLSCHED_TP1CHAIN:
         printf("TP1 with CHAIN\n");
+        printf("chain_threshold %d\n", chain_threshold);
         kh.create_sptrsv_handle(SPTRSVAlgorithm::SEQLVLSCHD_TP1CHAIN, nrows, is_lower_tri);
-        //const int thresh = 1;
-        kh.get_sptrsv_handle()->reset_chain_threshold(2);
+        kh.get_sptrsv_handle()->reset_chain_threshold(chain_threshold);
         kh.get_sptrsv_handle()->print_algorithm();
         break;
 /*
@@ -436,9 +436,9 @@ int test_sptrsv_perf(std::vector<int> tests, std::string& lfilename, std::string
         break;
       case LVLSCHED_TP1CHAIN:
         printf("TP1 with CHAIN\n");
+        printf("chain_threshold %d\n", chain_threshold);
         kh.create_sptrsv_handle(SPTRSVAlgorithm::SEQLVLSCHD_TP1CHAIN, nrows, is_lower_tri);
-        //const int thresh = 1;
-        kh.get_sptrsv_handle()->reset_chain_threshold(2);
+        kh.get_sptrsv_handle()->reset_chain_threshold(chain_threshold);
         kh.get_sptrsv_handle()->print_algorithm();
         break;
 /*
@@ -595,22 +595,22 @@ void print_help_sptrsv() {
   printf("Options:\n");
   printf("  --test [OPTION] : Use different kernel implementations\n");
   printf("                    Options:\n");
-  printf("                      lvlrp, lvltp1, lvltp2\n\n");
+  printf("                      lvlrp, lvltp1, lvltp2 lvltp1chain\n\n");
   printf("                      cusparse           (Vendor Libraries)\n\n");
-  printf("  -lf [file]       : Read in Matrix Market formatted text file 'file'.\n");
-  printf("  -uf [file]       : Read in Matrix Market formatted text file 'file'.\n");
+  printf("  -lf [file]      : Read in Matrix Market formatted text file 'file'.\n");
+  printf("  -uf [file]      : Read in Matrix Market formatted text file 'file'.\n");
+  printf("  --offset [O]    : Subtract O from every index.\n");
+  printf("                    Useful in case the matrix market file is not 0 based.\n\n");
+  printf("  -ts [T]         : Number of threads per team.\n");
+  printf("  -vl [V]         : Vector-length (i.e. how many Cuda threads are a Kokkos 'thread').\n");
+  printf("  -ct [V]         : Chain threshold: Only has effect of lvltp1chain algorithm.\n");
+  printf("  --loop [LOOP]   : How many spmv to run to aggregate average time. \n");
+//  printf("  --write-lvl-freq: Write output files with number of nodes per level for each matrix and algorithm.\n");
 //  printf("  -s [N]          : generate a semi-random banded (band size 0.01xN) NxN matrix\n");
 //  printf("                    with average of 10 entries per row.\n");
 //  printf("  --schedule [SCH]: Set schedule for kk variant (static,dynamic,auto [ default ]).\n");
 //  printf("  -fb [file]      : Read in binary Matrix files 'file'.\n");
 //  printf("  --write-binary  : In combination with -f, generate binary files.\n");
-  printf("  --offset [O]    : Subtract O from every index.\n");
-  printf("                    Useful in case the matrix market file is not 0 based.\n\n");
-  printf("  -rpt [K]        : Number of Rows assigned to a thread.\n");
-  printf("  -ts [T]         : Number of threads per team.\n");
-  printf("  -vl [V]         : Vector-length (i.e. how many Cuda threads are a Kokkos 'thread').\n");
-  printf("  --loop [LOOP]       : How many spmv to run to aggregate average time. \n");
-//  printf("  --write-lvl-freq: Write output files with number of nodes per level for each matrix and algorithm.\n");
 }
 
 
@@ -625,6 +625,7 @@ int main(int argc, char **argv)
  int team_size = -1;
  int idx_offset = 0;
  int loop = 1;
+ int chain_threshold = 0;
 // int schedule=AUTO;
 
  if(argc == 1) {
@@ -659,6 +660,7 @@ int main(int argc, char **argv)
   if((strcmp(argv[i],"-uf")==0)) {ufilename = argv[++i]; continue;}
   if((strcmp(argv[i],"-ts")==0)) {team_size=atoi(argv[++i]); continue;}
   if((strcmp(argv[i],"-vl")==0)) {vector_length=atoi(argv[++i]); continue;}
+  if((strcmp(argv[i],"-ct")==0)) {chain_threshold=atoi(argv[++i]); continue;}
   if((strcmp(argv[i],"--offset")==0)) {idx_offset=atoi(argv[++i]); continue;}
   if((strcmp(argv[i],"--loop")==0)) {loop=atoi(argv[++i]); continue;}
 /*
@@ -691,7 +693,7 @@ int main(int argc, char **argv)
 
  Kokkos::initialize(argc,argv);
  {
-   int total_errors = test_sptrsv_perf<double>(tests,lfilename,ufilename,team_size,vector_length,idx_offset,loop);
+   int total_errors = test_sptrsv_perf<double>(tests, lfilename, ufilename, team_size, vector_length, idx_offset, loop, chain_threshold);
 
    if(total_errors == 0)
    printf("Kokkos::SPTRSV Test: Passed\n");
