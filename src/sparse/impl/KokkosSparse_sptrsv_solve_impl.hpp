@@ -197,7 +197,6 @@ struct LowerTriLvlSchedTP1SolverFunctor
             diag = ptr;
           }
         }, diff );
-
         team.team_barrier();
 
         // At end, finalize rowid == colid
@@ -209,6 +208,7 @@ struct LowerTriLvlSchedTP1SolverFunctor
         }
   }
 };
+
 
 // FIXME CUDA: This algorithm not working with all integral type combos
 // In any case, this serves as a skeleton for 3-level hierarchical parallelism for alg dev
@@ -232,7 +232,7 @@ struct LowerTriLvlSchedTP2SolverFunctor
   long node_groups;
 
 
-  LowerTriLvlSchedTP2SolverFunctor( const RowMapType &row_map_, const EntriesType &entries_, const ValuesType &values_, LHSType &lhs_, const RHSType &rhs_, const NGBLType &nodes_grouped_by_level_, long node_count_, long node_groups_ = 0) :
+  LowerTriLvlSchedTP2SolverFunctor(const RowMapType &row_map_, const EntriesType &entries_, const ValuesType &values_, LHSType &lhs_, const RHSType &rhs_, const NGBLType &nodes_grouped_by_level_, long node_count_, long node_groups_ = 0) :
     row_map(row_map_), entries(entries_), values(values_), lhs(lhs_), rhs(rhs_), nodes_grouped_by_level(nodes_grouped_by_level_), node_count(node_count_), node_groups(node_groups_) {}
 
 
@@ -446,7 +446,6 @@ struct UpperTriLvlSchedTP1SolverFunctor
           lhs(rowid) = (rhs_rowid+diff)/values(diag);
         }
   }
-
 };
 
 
@@ -472,12 +471,12 @@ struct UpperTriLvlSchedTP2SolverFunctor
   long node_groups;
 
 
-  UpperTriLvlSchedTP2SolverFunctor( const RowMapType &row_map_, const EntriesType &entries_, const ValuesType &values_, LHSType &lhs_, const RHSType &rhs_, const NGBLType &nodes_grouped_by_level_, long node_count_, long node_groups_ = 0 ) :
+  UpperTriLvlSchedTP2SolverFunctor(const RowMapType &row_map_, const EntriesType &entries_, const ValuesType &values_, LHSType &lhs_, const RHSType &rhs_, const NGBLType &nodes_grouped_by_level_, long node_count_, long node_groups_ = 0) :
     row_map(row_map_), entries(entries_), values(values_), lhs(lhs_), rhs(rhs_), nodes_grouped_by_level(nodes_grouped_by_level_), node_count(node_count_), node_groups(node_groups_) {}
 
 
   KOKKOS_INLINE_FUNCTION
-  void operator()( const member_type & team ) const {
+  void operator()(const member_type & team) const {
         auto my_league = team.league_rank(); // map to rowid
 
         size_t nrows = row_map.extent(0) - 1;

@@ -67,14 +67,10 @@ void symbolic_chain_phase(TriSolveHandle &thandle, const NPLViewType &nodes_per_
   size_type level = thandle.get_num_levels();
 
   // Create the chain now
-  // TODO Lazy allocation of h_chain_ptr - use num_levels as overestimate (rather than nrows)
-  // TODO What about the host? Execute "single_block" in serial? Or, different team_size?
   // FIXME Implementations will need to be templated on exec space it seems...
  auto cutoff_threshold = thandle.get_chain_threshold();
  std::cout << "SYMB cutoff = " << cutoff_threshold << std::endl;
  thandle.print_algorithm();
- //TODO If cutoff is not specified for CHAIN algm, error out
- //if ( thandle.get_algorithm() == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_TP1CHAIN && cutoff_threshold > -1 ) {
  if ( thandle.algm_requires_symb_chain() ) {
   std::cout << "SYMB Call CHAIN version" << std::endl;
   auto h_chain_ptr = thandle.get_host_chain_ptr();

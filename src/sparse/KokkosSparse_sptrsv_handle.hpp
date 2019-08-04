@@ -125,9 +125,24 @@ private:
   size_type num_chain_entries;
   signed_integral_t chain_threshold;
 
+  // Symbolic and Numeric: Dense-block data structures
+  /*
+  // TODO Should the dense-block stuff be stored in its own data structure?
+  typedef typename Kokkos::View<nnz_scalar_t **, HandlePersistentMemorySpace> mtx_scalar_view_t;
+  size_type row_threshold_cutoff;
+  mtx_scalar_view_t dense_matrix_block;
+  mtx_scalar_view_t dense_triangular_block;
+  nnz_scalar_view_t dense_vector_block;
+
+  bool require_symbolic_denseblock_phase;
+  bool symbolic_denseblock_correction_complete;
+  bool numeric_complete;
+  */
+
   bool symbolic_complete;
   bool require_symbolic_lvlsched_phase;
   bool require_symbolic_chain_phase;
+  // TODO May be helpful to track completion of phases the full symbolic does not need to be repeated for chain_threshold changes, for example
 //  bool symbolic_lvlsched_phase_complete;
 //  bool symbolic_chain_phase_complete;
 
@@ -261,7 +276,7 @@ public:
         }
       }
       else {
-        // FIXME Compate threshold with team_size limit - either error or automatically adjust if incompatible
+        // FIXME Compare threshold with team_size limit - either error or automatically adjust if incompatible
         if (this->team_size >= this->chain_threshold) {
           h_chain_ptr = host_signed_nnz_lno_view_t("h_chain_ptr", this->nrows);
         }
@@ -295,6 +310,13 @@ public:
   // TODO set_algorithm should reset the handle depending on which algms are being switched...
   void set_algorithm(SPTRSVAlgorithm choice) { 
     algm = choice; 
+  }
+
+  void reset_algorithm(SPTRSVAlgorithm choice) { 
+    if (algm != choice) {
+      algm = choice; 
+      init_handle(nrows);
+    }
   }
 
   SPTRSVAlgorithm get_algorithm() { return algm; }
