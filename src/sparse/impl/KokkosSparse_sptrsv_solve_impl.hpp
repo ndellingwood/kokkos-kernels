@@ -63,6 +63,100 @@ struct UnsortedTag {};
 
 
 template <class RowMapType, class EntriesType, class ValuesType, class LHSType, class RHSType, class NGBLType>
+struct TriLvlSchedTP1SolverFunctor
+{
+  typedef typename RowMapType::execution_space execution_space;
+  typedef Kokkos::TeamPolicy<execution_space> policy_type;
+  typedef typename policy_type::member_type member_type;
+  typedef typename EntriesType::non_const_value_type lno_t;
+  typedef typename ValuesType::non_const_value_type scalar_t;
+
+  RowMapType row_map;
+  EntriesType entries;
+  ValuesType values;
+  LHSType lhs;
+  RHSType rhs;
+  NGBLType nodes_grouped_by_level;
+
+  bool is_lowertri;
+
+  long node_count; // like "block" offset into ngbl, my_league is the "local" offset
+  long node_groups;
+
+
+  TriLvlSchedTP1SolverFunctor( const RowMapType &row_map_, const EntriesType &entries_, const ValuesType &values_, LHSType &lhs_, const RHSType &rhs_, const NGBLType &nodes_grouped_by_level_, bool is_lowertri_, long node_count_, long node_groups_ = 0) :
+    row_map(row_map_), entries(entries_), values(values_), lhs(lhs_), rhs(rhs_), nodes_grouped_by_level(nodes_grouped_by_level_), is_lowertri(is_lowertri_), node_count(node_count_), node_groups(node_groups_) {}
+
+
+  KOKKOS_INLINE_FUNCTION
+  void operator()( const member_type & team ) const {
+        auto my_league = team.league_rank(); // map to rowid
+        auto rowid = nodes_grouped_by_level(my_league + node_count);
+        auto my_rank = team.team_rank();
+
+        auto soffset = row_map(rowid);
+        auto eoffset = row_map(rowid+1);
+        auto rhs_rowid = rhs(rowid);
+        scalar_t diff = scalar_t(0.0);
+
+      Kokkos::parallel_reduce( Kokkos::TeamThreadRange( team, soffset, eoffset ), [&] ( const long ptr, scalar_t &tdiff ) {
+          auto colid = entries(ptr);
+          auto val   = values(ptr);
+          if ( colid != rowid ) {
+            tdiff = tdiff - val*lhs(colid);
+          }
+      }, diff );
+
+        team.team_barrier();
+
+        // At end, finalize rowid == colid
+        // only one thread should do this; can also use Kokkos::single
+        if ( my_rank == 0 )
+        {
+        // ASSUMPTION: sorted diagonal value located at eoffset - 1
+          lhs(rowid) = is_lowertri ? (rhs_rowid+diff)/values(eoffset-1) : (rhs_rowid+diff)/values(soffset);
+        }
+  }
+
+  KOKKOS_INLINE_FUNCTION
+  void operator()(const UnsortedTag&, const member_type & team) const {
+        auto my_league = team.league_rank(); // map to rowid
+        auto rowid = nodes_grouped_by_level(my_league + node_count);
+        auto my_rank = team.team_rank();
+
+        auto soffset = row_map(rowid);
+        auto eoffset = row_map(rowid+1);
+        auto rhs_rowid = rhs(rowid);
+        scalar_t diff = scalar_t(0.0);
+
+        auto diag = -1;
+
+        Kokkos::parallel_reduce( Kokkos::TeamThreadRange( team, soffset, eoffset ), [&] ( const long ptr, scalar_t &tdiff ) {
+          auto colid = entries(ptr);
+          auto val   = values(ptr);
+          if ( colid != rowid ) {
+            tdiff = tdiff - val*lhs(colid);
+          }
+          else {
+            diag = ptr;
+          }
+        }, diff );
+        team.team_barrier();
+
+        // At end, finalize rowid == colid
+        // only one thread should do this; can also use Kokkos::single
+        if ( my_rank == 0 )
+        {
+        // ASSUMPTION: sorted diagonal value located at eoffset - 1
+          lhs(rowid) = (rhs_rowid+diff)/values(diag);
+        }
+  }
+};
+
+
+
+
+template <class RowMapType, class EntriesType, class ValuesType, class LHSType, class RHSType, class NGBLType>
 struct LowerTriLvlSchedRPSolverFunctor
 {
   typedef typename EntriesType::non_const_value_type lno_t;
@@ -119,6 +213,7 @@ struct LowerTriLvlSchedRPSolverFunctor
     lhs(rowid) = rhs_rowid/values(diag);
   }
 };
+
 
 
 template <class RowMapType, class EntriesType, class ValuesType, class LHSType, class RHSType, class NGBLType>
@@ -579,17 +674,18 @@ struct LowerTriLvlSchedTP1SingleBlockFunctor
   KOKKOS_INLINE_FUNCTION
   void operator()( const member_type & team ) const {
     long mut_node_count = node_count;
+      typename NGBLType::non_const_value_type rowid {0};
+      typename RowMapType::non_const_value_type soffset {0};
+      typename RowMapType::non_const_value_type eoffset {0};
+      typename RHSType::non_const_value_type rhs_val {0};
+      scalar_t diff = scalar_t(0.0);
     for ( auto lvl = lvl_start; lvl < lvl_end; ++lvl ) {
       auto nodes_this_lvl = nodes_per_level(lvl);
       int my_rank = team.team_rank();
 #ifdef CHAIN_DEBUG_OUTPUT
       printf("league_rank: %d  team_rank: %d  lvl: %ld  nodes_this_lvl: %ld\n", team.league_rank(), team.team_rank(), lvl, (long)nodes_this_lvl);
 #endif
-      typename NGBLType::non_const_value_type rowid {0};
-      typename RowMapType::non_const_value_type soffset {0};
-      typename RowMapType::non_const_value_type eoffset {0};
-      typename RHSType::non_const_value_type rhs_val {0};
-      scalar_t diff = scalar_t(0.0);
+      diff = scalar_t(0.0);
 
       if (my_rank < nodes_this_lvl) {
 
@@ -624,6 +720,8 @@ struct LowerTriLvlSchedTP1SingleBlockFunctor
         }
         // ASSUMPTION: sorted diagonal value located at eoffset - 1
         lhs(rowid) = (rhs_val+diff)/values(eoffset-1);
+        // else if uppertri
+        //   lhs(rowid) = (rhs_val+diff)/values(soffset);
 
       } // end if team.team_rank() < nodes_this_lvl
       {
@@ -667,17 +765,18 @@ struct UpperTriLvlSchedTP1SingleBlockFunctor
   KOKKOS_INLINE_FUNCTION
   void operator()( const member_type & team ) const {
     long mut_node_count = node_count;
+      typename NGBLType::non_const_value_type rowid {0};
+      typename RowMapType::non_const_value_type soffset {0};
+      typename RowMapType::non_const_value_type eoffset {0};
+      typename RHSType::non_const_value_type rhs_val {0};
+      scalar_t diff = scalar_t(0.0);
     for ( auto lvl = lvl_start; lvl < lvl_end; ++lvl ) {
       auto nodes_this_lvl = nodes_per_level(lvl);
       int my_rank = team.team_rank();
 #ifdef CHAIN_DEBUG_OUTPUT
       printf("league_rank: %d  team_rank: %d  lvl: %ld  nodes_this_lvl: %ld\n", team.league_rank(), team.team_rank(), lvl, (long)nodes_this_lvl);
 #endif
-      typename NGBLType::non_const_value_type rowid {0};
-      typename RowMapType::non_const_value_type soffset {0};
-      typename RowMapType::non_const_value_type eoffset {0};
-      typename RHSType::non_const_value_type rhs_val {0};
-      scalar_t diff = scalar_t(0.0);
+      diff = scalar_t(0.0);
 
       if (my_rank < nodes_this_lvl) {
 
@@ -757,7 +856,8 @@ void lower_tri_solve( TriSolveHandle & thandle, const RowMapType row_map, const 
         typedef Kokkos::TeamPolicy<execution_space> policy_type;
         int team_size = thandle.get_team_size();
 
-        LowerTriLvlSchedTP1SolverFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, node_count);
+        //LowerTriLvlSchedTP1SolverFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, node_count);
+        TriLvlSchedTP1SolverFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, true, node_count);
         if ( team_size == -1 )
           Kokkos::parallel_for("parfor_l_team", policy_type( lvl_nodes , Kokkos::AUTO ), tstf);
         else
@@ -792,6 +892,76 @@ void lower_tri_solve( TriSolveHandle & thandle, const RowMapType row_map, const 
   } // end for lvl
 
 } // end lower_tri_solve
+
+
+
+template < class TriSolveHandle, class RowMapType, class EntriesType, class ValuesType, class RHSType, class LHSType >
+void upper_tri_solve( TriSolveHandle & thandle, const RowMapType row_map, const EntriesType entries, const ValuesType values, const RHSType & rhs, LHSType &lhs) {
+
+  typedef typename TriSolveHandle::execution_space execution_space;
+  typedef typename TriSolveHandle::size_type size_type;
+  typedef typename TriSolveHandle::nnz_lno_view_t NGBLType;
+
+  auto nlevels = thandle.get_num_levels();
+  // Keep this a host View, create device version and copy to back to host during scheduling
+  auto nodes_per_level = thandle.get_nodes_per_level();
+  auto hnodes_per_level = Kokkos::create_mirror_view(nodes_per_level);
+  Kokkos::deep_copy(hnodes_per_level, nodes_per_level);
+
+  auto nodes_grouped_by_level = thandle.get_nodes_grouped_by_level();
+
+  size_type node_count = 0;
+
+  // This must stay serial; would be nice to try out Cuda's graph stuff to reduce kernel launch overhead
+  for ( size_type lvl = 0; lvl < nlevels; ++lvl ) {
+    size_type lvl_nodes = hnodes_per_level(lvl);
+
+    if ( lvl_nodes != 0 ) {
+
+      if ( thandle.get_algorithm() == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_RP ) {
+        Kokkos::parallel_for( "parfor_fixed_lvl", Kokkos::RangePolicy<execution_space>( node_count, node_count+lvl_nodes ), UpperTriLvlSchedRPSolverFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> (row_map, entries, values, lhs, rhs, nodes_grouped_by_level) );
+      }
+      else if ( thandle.get_algorithm() == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_TP1 ) {
+        typedef Kokkos::TeamPolicy<execution_space> policy_type;
+
+        int team_size = thandle.get_team_size();
+
+//        UpperTriLvlSchedTP1SolverFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, node_count);
+        TriLvlSchedTP1SolverFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, false, node_count);
+        if ( team_size == -1 )
+          Kokkos::parallel_for("parfor_u_team", policy_type( lvl_nodes , Kokkos::AUTO ), tstf);
+        else
+          Kokkos::parallel_for("parfor_u_team", policy_type( lvl_nodes , team_size ), tstf);
+      }
+      // TP2 algorithm has issues with some offset-ordinal combo to be addressed
+      else if ( thandle.get_algorithm() == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHED_TP2 ) {
+        typedef Kokkos::TeamPolicy<execution_space> tvt_policy_type;
+
+        int team_size = thandle.get_team_size();
+        if ( team_size == -1 ) {
+          team_size = std::is_same< typename Kokkos::DefaultExecutionSpace::memory_space, Kokkos::HostSpace >::value ? 1 : 128;
+        }
+        int vector_size = thandle.get_team_size();
+        if ( vector_size == -1 ) {
+          vector_size = std::is_same< typename Kokkos::DefaultExecutionSpace::memory_space, Kokkos::HostSpace >::value ? 1 : 4;
+        }
+
+        // This impl: "chunk" lvl_nodes into node_groups; a league_rank is responsible for processing that many nodes
+        //       TeamThreadRange over number of node_groups
+        //       To avoid masking threads, 1 thread (team) per node in node_group
+        //       ThreadVectorRange responsible for the actual solve computation
+        const int node_groups = team_size;
+
+        UpperTriLvlSchedTP2SolverFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, node_count, node_groups);
+        Kokkos::parallel_for("parfor_u_team_vector", tvt_policy_type( (int)std::ceil((float)lvl_nodes/(float)node_groups) , team_size, vector_size ), tstf);
+      } // end elseif
+
+      node_count += lvl_nodes;
+
+    } // end if
+  } // end for lvl
+
+} // end upper_tri_solve
 
 
 template < class TriSolveHandle, class RowMapType, class EntriesType, class ValuesType, class RHSType, class LHSType >
@@ -878,74 +1048,6 @@ void tri_solve_chain(TriSolveHandle & thandle, const RowMapType row_map, const E
   } // end for chainlink
 
 } // end tri_solve_chain
-
-
-template < class TriSolveHandle, class RowMapType, class EntriesType, class ValuesType, class RHSType, class LHSType >
-void upper_tri_solve( TriSolveHandle & thandle, const RowMapType row_map, const EntriesType entries, const ValuesType values, const RHSType & rhs, LHSType &lhs) {
-
-  typedef typename TriSolveHandle::execution_space execution_space;
-  typedef typename TriSolveHandle::size_type size_type;
-  typedef typename TriSolveHandle::nnz_lno_view_t NGBLType;
-
-  auto nlevels = thandle.get_num_levels();
-  // Keep this a host View, create device version and copy to back to host during scheduling
-  auto nodes_per_level = thandle.get_nodes_per_level();
-  auto hnodes_per_level = Kokkos::create_mirror_view(nodes_per_level);
-  Kokkos::deep_copy(hnodes_per_level, nodes_per_level);
-
-  auto nodes_grouped_by_level = thandle.get_nodes_grouped_by_level();
-
-  size_type node_count = 0;
-
-  // This must stay serial; would be nice to try out Cuda's graph stuff to reduce kernel launch overhead
-  for ( size_type lvl = 0; lvl < nlevels; ++lvl ) {
-    size_type lvl_nodes = hnodes_per_level(lvl);
-
-    if ( lvl_nodes != 0 ) {
-
-      if ( thandle.get_algorithm() == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_RP ) {
-        Kokkos::parallel_for( "parfor_fixed_lvl", Kokkos::RangePolicy<execution_space>( node_count, node_count+lvl_nodes ), UpperTriLvlSchedRPSolverFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> (row_map, entries, values, lhs, rhs, nodes_grouped_by_level) );
-      }
-      else if ( thandle.get_algorithm() == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_TP1 ) {
-        typedef Kokkos::TeamPolicy<execution_space> policy_type;
-
-        int team_size = thandle.get_team_size();
-
-        UpperTriLvlSchedTP1SolverFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, node_count);
-        if ( team_size == -1 )
-          Kokkos::parallel_for("parfor_u_team", policy_type( lvl_nodes , Kokkos::AUTO ), tstf);
-        else
-          Kokkos::parallel_for("parfor_u_team", policy_type( lvl_nodes , team_size ), tstf);
-      }
-      // TP2 algorithm has issues with some offset-ordinal combo to be addressed
-      else if ( thandle.get_algorithm() == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHED_TP2 ) {
-        typedef Kokkos::TeamPolicy<execution_space> tvt_policy_type;
-
-        int team_size = thandle.get_team_size();
-        if ( team_size == -1 ) {
-          team_size = std::is_same< typename Kokkos::DefaultExecutionSpace::memory_space, Kokkos::HostSpace >::value ? 1 : 128;
-        }
-        int vector_size = thandle.get_team_size();
-        if ( vector_size == -1 ) {
-          vector_size = std::is_same< typename Kokkos::DefaultExecutionSpace::memory_space, Kokkos::HostSpace >::value ? 1 : 4;
-        }
-
-        // This impl: "chunk" lvl_nodes into node_groups; a league_rank is responsible for processing that many nodes
-        //       TeamThreadRange over number of node_groups
-        //       To avoid masking threads, 1 thread (team) per node in node_group
-        //       ThreadVectorRange responsible for the actual solve computation
-        const int node_groups = team_size;
-
-        UpperTriLvlSchedTP2SolverFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, node_count, node_groups);
-        Kokkos::parallel_for("parfor_u_team_vector", tvt_policy_type( (int)std::ceil((float)lvl_nodes/(float)node_groups) , team_size, vector_size ), tstf);
-      } // end elseif
-
-      node_count += lvl_nodes;
-
-    } // end if
-  } // end for lvl
-
-} // end upper_tri_solve
 
 
 } // namespace Experimental
