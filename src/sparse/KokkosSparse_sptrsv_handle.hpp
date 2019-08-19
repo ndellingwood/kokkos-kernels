@@ -46,14 +46,14 @@
 #include <iostream>
 #include <string>
 
-#ifndef _SPTRSVHANDLE_HPP
-#define _SPTRSVHANDLE_HPP
+#ifndef KOKKOSSPARSE_SPTRSVHANDLE_HPP
+#define KOKKOSSPARSE_SPTRSVHANDLE_HPP
 
 namespace KokkosSparse {
 namespace Experimental {
 
-// TP2 algorithm has issues with some offset-ordinal combo to be addressed
-enum class SPTRSVAlgorithm { SEQLVLSCHD_RP, SEQLVLSCHD_TP1, SEQLVLSCHED_TP2, SEQLVLSCHD_TP1CHAIN/*, SEQLVLSCHED_TP2CHAIN*/ };
+// TODO TP2 algorithm had issues with some offset-ordinal combo to be addressed when compiled in Trilinos...
+enum class SPTRSVAlgorithm { SEQLVLSCHD_RP, SEQLVLSCHD_TP1, SEQLVLSCHED_TP2, SEQLVLSCHD_TP1CHAIN };
 // TODO Just added enum labels for "chain" implementations - may need to completely replace the existing algms with these once complete
 
 template <class size_type_, class lno_t_, class scalar_t_,
@@ -359,7 +359,8 @@ public:
 
   // FIXME This is only interface for setting the chain_threshold for now, but results in unnecessary realloc of h_chain_ptr
   void reset_chain_threshold(const signed_integral_t threshold) { 
-    // TODO Must check that team_size corresponding to chain_threshold is valid
+    // TODO Must check that team_size corresponding to chain_threshold is valid, but requires instantiating the kernel to get max_team_size
+    // NOTE: Below span() is being used as a proxy for an uninitialized h_chain_ptr (i.e. 0 length)
     if (threshold != this->chain_threshold || h_chain_ptr.span() == 0) {
         this->chain_threshold = threshold;
         if (this->team_size >= this->chain_threshold) {

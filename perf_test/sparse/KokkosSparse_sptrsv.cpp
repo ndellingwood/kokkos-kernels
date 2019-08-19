@@ -197,12 +197,10 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
         kh.get_sptrsv_handle()->reset_chain_threshold(chain_threshold);
         kh.get_sptrsv_handle()->print_algorithm();
         break;
-/*
       case LVLSCHED_TP2:
         kh.create_sptrsv_handle(SPTRSVAlgorithm::SEQLVLSCHED_TP2, nrows, is_lower_tri);
         kh.get_sptrsv_handle()->print_algorithm();
         break;
-*/
 #ifdef KOKKOSKERNELS_ENABLE_TPL_CUSPARSE
       case CUSPARSE:
         std::cout << "CUSPARSE: No kk interface added yet" << std::endl;
@@ -441,12 +439,10 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
         kh.get_sptrsv_handle()->reset_chain_threshold(chain_threshold);
         kh.get_sptrsv_handle()->print_algorithm();
         break;
-/*
       case LVLSCHED_TP2:
         kh.create_sptrsv_handle(SPTRSVAlgorithm::SEQLVLSCHED_TP2, nrows, is_lower_tri);
         kh.get_sptrsv_handle()->print_algorithm();
         break;
-*/
 #ifdef KOKKOSKERNELS_ENABLE_TPL_CUSPARSE
       case CUSPARSE:
         std::cout << "CUSPARSE: No kk interface added yet" << std::endl;
@@ -646,11 +642,9 @@ int main(int argc, char **argv)
     if((strcmp(argv[i],"lvltp1chain")==0)) {
       tests.push_back( LVLSCHED_TP1CHAIN );
     }
-/*
     if((strcmp(argv[i],"lvltp2")==0)) {
       tests.push_back( LVLSCHED_TP2 );
     }
-*/
     if((strcmp(argv[i],"cusparse")==0)) {
       tests.push_back( CUSPARSE );
     }

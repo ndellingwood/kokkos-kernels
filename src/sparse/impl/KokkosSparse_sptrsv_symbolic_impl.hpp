@@ -51,7 +51,7 @@
 #include <Kokkos_ArithTraits.hpp>
 #include <KokkosSparse_sptrsv_handle.hpp>
 
-//#define LVL_OUTPUT_INFO
+#define LVL_OUTPUT_INFO
 
 // TODO Pass values array and store diagonal entries - should this always be done or optional?
 
@@ -69,7 +69,7 @@ void symbolic_chain_phase(TriSolveHandle &thandle, const NPLViewType &nodes_per_
   // Create the chain now
   // FIXME Implementations will need to be templated on exec space it seems...
  auto cutoff_threshold = thandle.get_chain_threshold();
- thandle.print_algorithm();
+ //thandle.print_algorithm();
  if ( thandle.algm_requires_symb_chain() ) {
   std::cout << "SYMB Call CHAIN version" << std::endl;
   auto h_chain_ptr = thandle.get_host_chain_ptr();
@@ -406,5 +406,9 @@ void upper_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, co
 } // namespace Experimental
 } // namespace Impl
 } // namespace KokkosSparse
+
+#ifdef LVL_OUTPUT_INFO
+#undef LVL_OUTPUT_INFO
+#endif
 
 #endif

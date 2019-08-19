@@ -62,6 +62,7 @@ namespace Experimental {
 struct UnsortedTag {};
 
 
+// This functor unifies the lower and upper implementations, the hope is the "is_lower" check does not add noticable time on larger problems
 template <class RowMapType, class EntriesType, class ValuesType, class LHSType, class RHSType, class NGBLType>
 struct TriLvlSchedTP1SolverFunctor
 {
@@ -78,13 +79,13 @@ struct TriLvlSchedTP1SolverFunctor
   RHSType rhs;
   NGBLType nodes_grouped_by_level;
 
-  bool is_lowertri;
+  const bool is_lowertri;
 
   long node_count; // like "block" offset into ngbl, my_league is the "local" offset
   long node_groups;
 
 
-  TriLvlSchedTP1SolverFunctor( const RowMapType &row_map_, const EntriesType &entries_, const ValuesType &values_, LHSType &lhs_, const RHSType &rhs_, const NGBLType &nodes_grouped_by_level_, bool is_lowertri_, long node_count_, long node_groups_ = 0) :
+  TriLvlSchedTP1SolverFunctor( const RowMapType &row_map_, const EntriesType &entries_, const ValuesType &values_, LHSType &lhs_, const RHSType &rhs_, const NGBLType &nodes_grouped_by_level_, const bool is_lowertri_, long node_count_, long node_groups_ = 0) :
     row_map(row_map_), entries(entries_), values(values_), lhs(lhs_), rhs(rhs_), nodes_grouped_by_level(nodes_grouped_by_level_), is_lowertri(is_lowertri_), node_count(node_count_), node_groups(node_groups_) {}
 
 
@@ -822,6 +823,103 @@ struct UpperTriLvlSchedTP1SingleBlockFunctor
   } // end operator
 };
 
+
+template <class RowMapType, class EntriesType, class ValuesType, class LHSType, class RHSType, class NGBLType>
+struct TriLvlSchedTP1SingleBlockFunctor
+{
+  typedef typename RowMapType::execution_space execution_space;
+  typedef Kokkos::TeamPolicy<execution_space> policy_type;
+  typedef typename policy_type::member_type member_type;
+  typedef typename EntriesType::non_const_value_type lno_t;
+  typedef typename ValuesType::non_const_value_type scalar_t;
+
+  RowMapType row_map;
+  EntriesType entries;
+  ValuesType values;
+  LHSType lhs;
+  RHSType rhs;
+  NGBLType nodes_grouped_by_level;
+  NGBLType nodes_per_level;
+
+  long node_count; // like "block" offset into ngbl, my_league is the "local" offset
+  long lvl_start;
+  long lvl_end;
+  const bool is_lower;
+  // team_size: each team can be assigned a row, if there are enough rows...
+
+
+  TriLvlSchedTP1SingleBlockFunctor( const RowMapType &row_map_, const EntriesType &entries_, const ValuesType &values_, LHSType &lhs_, const RHSType &rhs_, const NGBLType &nodes_grouped_by_level_, NGBLType &nodes_per_level_, long node_count_, long lvl_start_, long lvl_end_, const bool is_lower_ ) :
+    row_map(row_map_), entries(entries_), values(values_), lhs(lhs_), rhs(rhs_), nodes_grouped_by_level(nodes_grouped_by_level_), nodes_per_level(nodes_per_level_), node_count(node_count_), lvl_start(lvl_start_), lvl_end(lvl_end_), is_lower(is_lower_) {}
+
+  // SingleBlock: Only one block (or league) executing; team_rank used to map thread to row
+
+  KOKKOS_INLINE_FUNCTION
+  void operator()( const member_type & team ) const {
+    long mut_node_count = node_count;
+      typename NGBLType::non_const_value_type rowid {0};
+      typename RowMapType::non_const_value_type soffset {0};
+      typename RowMapType::non_const_value_type eoffset {0};
+      typename RHSType::non_const_value_type rhs_val {0};
+      scalar_t diff = scalar_t(0.0);
+    for ( auto lvl = lvl_start; lvl < lvl_end; ++lvl ) {
+      auto nodes_this_lvl = nodes_per_level(lvl);
+      int my_rank = team.team_rank();
+#ifdef CHAIN_DEBUG_OUTPUT
+      printf("league_rank: %d  team_rank: %d  lvl: %ld  nodes_this_lvl: %ld\n", team.league_rank(), team.team_rank(), lvl, (long)nodes_this_lvl);
+#endif
+      diff = scalar_t(0.0);
+
+      if (my_rank < nodes_this_lvl) {
+
+        // THIS is where the mapping of threadid to rowid happens
+        rowid = nodes_grouped_by_level(my_rank + mut_node_count);
+
+        soffset = row_map(rowid);
+        eoffset = row_map(rowid+1);
+        rhs_val = rhs(rowid);
+#ifdef CHAIN_DEBUG_OUTPUT
+        printf("league_rank: %d  team_rank: %d  node_count: %ld  lvl_start: %ld  lvl_end: %ld\n", team.league_rank(), team.team_rank(), mut_node_count, lvl_start, lvl_end);
+        printf("  team_rank: %d  mut_node_count: %ld  ngbl: %ld\n", team.team_rank(), mut_node_count, (long)rowid);
+        printf("  team_rank passed if: %d  rowid: %d  soffset: %d  eoffset: %d  rhs_val: %lf\n", team.team_rank(), (int)rowid, (int)soffset, (int)eoffset, rhs_val);
+#endif
+
+// FIXME NOTES:
+// Assumptions: 1. Each "thread" owns a row in the level
+//              2. At this point, the nested parallel_reduce is coordinating over all threads within the team!!!!! This is the bug in nt > 1 case.
+// FIX:
+//              Replace TeamThreadRange (which is allowing threads to cooperate over the solve...) with a for loop, then TeamVectorRange
+// Round 2: Use TeamVectorRange Policy
+
+        for (auto ptr = soffset; ptr < eoffset; ++ptr) {
+          auto colid = entries(ptr);
+          auto val   = values(ptr);
+#ifdef CHAIN_DEBUG_OUTPUT
+          printf("  ptr: %d  colid: %d  val: %lf  rank: %d\n", (int)ptr, (int)colid, val, team.team_rank());
+#endif
+          if ( colid != rowid ) {
+            diff -= val*lhs(colid);
+          }
+        }
+        // ASSUMPTION: sorted diagonal value located at eoffset - 1 for lower tri, soffset for upper tri
+        if (is_lower)
+          lhs(rowid) = (rhs_val+diff)/values(eoffset-1);
+        else
+          lhs(rowid) = (rhs_val+diff)/values(soffset);
+        // else if uppertri
+        //   lhs(rowid) = (rhs_val+diff)/values(soffset);
+
+      } // end if team.team_rank() < nodes_this_lvl
+      {
+        // Update mut_node_count from nodes_per_level(lvl) each iteration of lvl per thread
+        mut_node_count += nodes_this_lvl;
+      }
+      team.team_barrier();
+    } // end for lvl
+  } // end operator
+
+};
+
+
 // --------------------------------
 // solver control routines
 // --------------------------------
@@ -947,8 +1045,8 @@ void upper_tri_solve( TriSolveHandle & thandle, const RowMapType row_map, const 
         }
 
         // This impl: "chunk" lvl_nodes into node_groups; a league_rank is responsible for processing that many nodes
-        //       TeamThreadRange over number of node_groups
-        //       To avoid masking threads, 1 thread (team) per node in node_group
+        //       TeamThreadRange over number nodes of node_groups
+        //       To avoid masking threads, 1 thread (team) per node in node_group (thread has full ownership of a node)
         //       ThreadVectorRange responsible for the actual solve computation
         const int node_groups = team_size;
 
@@ -998,14 +1096,16 @@ void tri_solve_chain(TriSolveHandle & thandle, const RowMapType row_map, const E
         size_type lvl_nodes = hnodes_per_level(schain); //lvl == echain????
 
         if (is_lower) {
-          LowerTriLvlSchedTP1SolverFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, node_count);
+          //LowerTriLvlSchedTP1SolverFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, node_count);
+          TriLvlSchedTP1SolverFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, true, node_count);
           if ( team_size == -1 )
             Kokkos::parallel_for("parfor_l_team_chain1auto", policy_type( lvl_nodes , Kokkos::AUTO ), tstf);
           else
             Kokkos::parallel_for("parfor_l_team_chain1", policy_type( lvl_nodes , team_size ), tstf);
         }
         else {
-          UpperTriLvlSchedTP1SolverFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, node_count);
+          //UpperTriLvlSchedTP1SolverFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, node_count);
+          TriLvlSchedTP1SolverFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, false, node_count);
           if ( team_size == -1 )
             Kokkos::parallel_for("parfor_u_team_chain1auto", policy_type( lvl_nodes , Kokkos::AUTO ), tstf);
           else
@@ -1028,10 +1128,12 @@ void tri_solve_chain(TriSolveHandle & thandle, const RowMapType row_map, const E
 //        const int team_size = std::is_same<typename Kokkos::DefaultExecutionSpace::memory_space, Kokkos::HostSpace>::value ? 1 : 256; // TODO chainlink cutoff hard-coded to 256: make this a "threshold" parameter in the handle
 
         if (is_lower) {
+//          TriLvlSchedTP1SingleBlockFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, nodes_per_level, node_count, schain, echain, true);
           LowerTriLvlSchedTP1SingleBlockFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, nodes_per_level, node_count, schain, echain);
           Kokkos::parallel_for("parfor_l_team_chainmulti", policy_type( 1, team_size ), tstf);
         }
         else {
+//          TriLvlSchedTP1SingleBlockFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, nodes_per_level, node_count, schain, echain, false);
           UpperTriLvlSchedTP1SingleBlockFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, nodes_per_level, node_count, schain, echain);
           Kokkos::parallel_for("parfor_u_team_chainmulti", policy_type( 1, team_size ), tstf);
         }
@@ -1053,5 +1155,9 @@ void tri_solve_chain(TriSolveHandle & thandle, const RowMapType row_map, const E
 } // namespace Experimental
 } // namespace Impl
 } // namespace KokkosSparse
+
+#ifdef LVL_OUTPUT_INFO
+#undef LVL_OUTPUT_INFO
+#endif
 
 #endif
