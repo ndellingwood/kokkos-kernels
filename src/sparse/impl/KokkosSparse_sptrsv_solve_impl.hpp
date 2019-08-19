@@ -53,6 +53,7 @@
 
 //#define LVL_OUTPUT_INFO
 //#define CHAIN_DEBUG_OUTPUT
+#define TRISOLVE_TIMERS
 
 namespace KokkosSparse {
 namespace Impl {
@@ -931,6 +932,14 @@ void lower_tri_solve( TriSolveHandle & thandle, const RowMapType row_map, const 
   typedef typename TriSolveHandle::size_type size_type;
   typedef typename TriSolveHandle::nnz_lno_view_t NGBLType;
 
+#ifdef TRISOLVE_TIMERS
+  double time_outer = 0.0, time_inner_total = 0.0, time_setup = 0.0;
+  int tp1_ctr = 0;
+  Kokkos::Timer timer_total;
+  Kokkos::Timer timer_inner;
+  Kokkos::Timer timer_setup;
+#endif
+
   auto nlevels = thandle.get_num_levels();
   // Keep this a host View, create device version and copy to back to host during scheduling
   auto nodes_per_level = thandle.get_nodes_per_level();
@@ -940,11 +949,19 @@ void lower_tri_solve( TriSolveHandle & thandle, const RowMapType row_map, const 
   auto nodes_grouped_by_level = thandle.get_nodes_grouped_by_level();
 
   size_type node_count = 0;
+#ifdef TRISOLVE_TIMERS
+    // time for setup
+    time_setup = timer_setup.seconds();
+    timer_total.reset();
+#endif
 
   // This must stay serial; would be nice to try out Cuda's graph stuff to reduce kernel launch overhead
   for ( size_type lvl = 0; lvl < nlevels; ++lvl ) {
     size_type lvl_nodes = hnodes_per_level(lvl);
 
+#ifdef TRISOLVE_TIMERS
+    timer_inner.reset();
+#endif
     if ( lvl_nodes != 0 ) {
 
       if ( thandle.get_algorithm() == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_RP ) {
@@ -953,6 +970,10 @@ void lower_tri_solve( TriSolveHandle & thandle, const RowMapType row_map, const 
       else if ( thandle.get_algorithm() == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_TP1 ) {
         typedef Kokkos::TeamPolicy<execution_space> policy_type;
         int team_size = thandle.get_team_size();
+    #ifdef TRISOLVE_TIMERS
+        std::cout << "  TP1 Upper team_size = " << team_size << std::endl;
+        tp1_ctr++;
+    #endif
 
         //LowerTriLvlSchedTP1SolverFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, node_count);
         TriLvlSchedTP1SolverFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, true, node_count);
@@ -987,7 +1008,21 @@ void lower_tri_solve( TriSolveHandle & thandle, const RowMapType row_map, const 
       node_count += lvl_nodes;
 
     } // end if
+#ifdef TRISOLVE_TIMERS
+    // FIXME Adding Kokkos::fence() for timing purposes - is it necessary if running on a single stream???
+    Kokkos::fence();
+    time_inner_total += timer_inner.seconds();
+#endif
   } // end for lvl
+#ifdef TRISOLVE_TIMERS
+  time_outer = timer_total.seconds();
+  std::cout << "********************************" << std::endl; 
+  std::cout << "  (l)tri_solve_chain: setup = " << time_setup << std::endl;
+  std::cout << "  (l)tri_solve_chain: total loop = " << time_outer << std::endl;
+  std::cout << "  (l)tri_solve_chain: accum lvl solves = " << time_inner_total << std::endl;
+  std::cout << "     solve calls = " << tp1_ctr << std::endl;
+  std::cout << "********************************" << std::endl; 
+#endif
 
 } // end lower_tri_solve
 
@@ -1000,6 +1035,14 @@ void upper_tri_solve( TriSolveHandle & thandle, const RowMapType row_map, const 
   typedef typename TriSolveHandle::size_type size_type;
   typedef typename TriSolveHandle::nnz_lno_view_t NGBLType;
 
+#ifdef TRISOLVE_TIMERS
+  double time_outer = 0.0, time_inner_total = 0.0, time_setup = 0.0;
+  int tp1_ctr = 0;
+  Kokkos::Timer timer_total;
+  Kokkos::Timer timer_inner;
+  Kokkos::Timer timer_setup;
+#endif
+
   auto nlevels = thandle.get_num_levels();
   // Keep this a host View, create device version and copy to back to host during scheduling
   auto nodes_per_level = thandle.get_nodes_per_level();
@@ -1010,10 +1053,19 @@ void upper_tri_solve( TriSolveHandle & thandle, const RowMapType row_map, const 
 
   size_type node_count = 0;
 
+#ifdef TRISOLVE_TIMERS
+    // time for setup
+    time_setup = timer_setup.seconds();
+    timer_total.reset();
+#endif
+
   // This must stay serial; would be nice to try out Cuda's graph stuff to reduce kernel launch overhead
   for ( size_type lvl = 0; lvl < nlevels; ++lvl ) {
     size_type lvl_nodes = hnodes_per_level(lvl);
 
+#ifdef TRISOLVE_TIMERS
+    timer_inner.reset();
+#endif
     if ( lvl_nodes != 0 ) {
 
       if ( thandle.get_algorithm() == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_RP ) {
@@ -1023,6 +1075,10 @@ void upper_tri_solve( TriSolveHandle & thandle, const RowMapType row_map, const 
         typedef Kokkos::TeamPolicy<execution_space> policy_type;
 
         int team_size = thandle.get_team_size();
+    #ifdef TRISOLVE_TIMERS
+        std::cout << "  TP1 Upper team_size = " << team_size << std::endl;
+        tp1_ctr++;
+    #endif
 
 //        UpperTriLvlSchedTP1SolverFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, node_count);
         TriLvlSchedTP1SolverFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, false, node_count);
@@ -1057,7 +1113,21 @@ void upper_tri_solve( TriSolveHandle & thandle, const RowMapType row_map, const 
       node_count += lvl_nodes;
 
     } // end if
+#ifdef TRISOLVE_TIMERS
+    // FIXME Adding Kokkos::fence() for timing purposes - is it necessary if running on a single stream???
+    Kokkos::fence();
+    time_inner_total += timer_inner.seconds();
+#endif
   } // end for lvl
+#ifdef TRISOLVE_TIMERS
+  time_outer = timer_total.seconds();
+  std::cout << "********************************" << std::endl; 
+  std::cout << "  (u)tri_solve_chain: setup = " << time_setup << std::endl;
+  std::cout << "  (u)tri_solve_chain: total loop = " << time_outer << std::endl;
+  std::cout << "  (u)tri_solve_chain: accum lvl solves = " << time_inner_total << std::endl;
+  std::cout << "     solve calls = " << tp1_ctr << std::endl;
+  std::cout << "********************************" << std::endl; 
+#endif
 
 } // end upper_tri_solve
 
@@ -1069,6 +1139,19 @@ void tri_solve_chain(TriSolveHandle & thandle, const RowMapType row_map, const E
   typedef typename TriSolveHandle::size_type size_type;
   typedef typename TriSolveHandle::nnz_lno_view_t NGBLType;
 
+#ifdef TRISOLVE_TIMERS
+  double time_outer = 0.0, time_full_solves = 0.0, time_chain_solves = 0.0, time_setup = 0.0, time_wrapped_ifelse = 0.0;
+
+  int tp1_ctr = 0, chain_ctr = 0;
+
+  double time_iter = 0.0;
+
+  Kokkos::Timer timer_outer;
+  Kokkos::Timer timer_full_solve;
+  Kokkos::Timer timer_chain_solve;
+  Kokkos::Timer timer_wrap_ifelse;
+  Kokkos::Timer timer_setup;
+#endif
   // Algorithm is checked before this function is called
   auto h_chain_ptr = thandle.get_host_chain_ptr();
   size_type num_chain_entries = thandle.get_num_chain_entries();
@@ -1081,11 +1164,20 @@ void tri_solve_chain(TriSolveHandle & thandle, const RowMapType row_map, const E
   auto nodes_grouped_by_level = thandle.get_nodes_grouped_by_level();
 
   size_type node_count = 0;
-
+#ifdef TRISOLVE_TIMERS
+   // prep time
+   time_setup = timer_setup.seconds(); 
+   timer_outer.reset();
+#endif
+  
   for ( size_type chainlink = 0; chainlink < num_chain_entries; ++chainlink ) {
     size_type schain = h_chain_ptr(chainlink);
     size_type echain = h_chain_ptr(chainlink+1);
 
+  #ifdef TRISOLVE_TIMERS
+     // fenced solve time
+     timer_wrap_ifelse.reset();
+  #endif
     if ( echain - schain == 1 ) {
       //std::cout << "Call regular single-link TP - chainlink: " << chainlink << std::endl;
       // run normal algm as this is a single level
@@ -1094,8 +1186,17 @@ void tri_solve_chain(TriSolveHandle & thandle, const RowMapType row_map, const E
         int team_size = thandle.get_team_size();
 
         size_type lvl_nodes = hnodes_per_level(schain); //lvl == echain????
+  #ifdef TRISOLVE_TIMERS
+      // full-solve time
+      tp1_ctr++;
+      std::cout << "  *** Calling non-single-block solve *** " << std::endl;
+      std::cout << "      team_size = " << team_size << std::endl;
+      std::cout << "      lvl_nodes = " << lvl_nodes << std::endl;
+      timer_full_solve.reset();
+  #endif
 
         if (is_lower) {
+          // TODO Time changes between merged functor and individuals
           //LowerTriLvlSchedTP1SolverFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, node_count);
           TriLvlSchedTP1SolverFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, true, node_count);
           if ( team_size == -1 )
@@ -1116,6 +1217,15 @@ void tri_solve_chain(TriSolveHandle & thandle, const RowMapType row_map, const E
         node_count += lvl_nodes;
         //std::cout << "  schain: " << schain << "  lvl_nodes: " << lvl_nodes << "  updated node_count: " << node_count << std::endl;
 
+      // TODO Test this inside if-else vs here
+      Kokkos::fence();
+  #ifdef TRISOLVE_TIMERS
+      // full-solve time
+      time_iter = timer_full_solve.seconds();
+      time_full_solves += time_iter;
+      std::cout << "  tp1 iter: " << tp1_ctr << "  time_iter = " << time_iter << std::endl;
+      //time_full_solves += timer_full_solve.seconds();
+  #endif
     }
     else {
       //std::cout << "Call multi-link single-block TP - chainlink: " << chainlink << std::endl;
@@ -1125,6 +1235,14 @@ void tri_solve_chain(TriSolveHandle & thandle, const RowMapType row_map, const E
         typedef Kokkos::TeamPolicy<execution_space> policy_type;
         auto cutoff = thandle.get_chain_threshold();
         const int team_size = cutoff;
+  #ifdef TRISOLVE_TIMERS
+     // full-solve time
+      chain_ctr++;
+      std::cout << "  *** Calling single-block solve *** " << std::endl;
+      std::cout << "      team_size = " << team_size << "  cutoff = " << cutoff << std::endl;
+      std::cout << "      lvl_nodes = " << lvl_nodes << std::endl;
+      timer_chain_solve.reset();
+  #endif
 //        const int team_size = std::is_same<typename Kokkos::DefaultExecutionSpace::memory_space, Kokkos::HostSpace>::value ? 1 : 256; // TODO chainlink cutoff hard-coded to 256: make this a "threshold" parameter in the handle
 
         if (is_lower) {
@@ -1144,10 +1262,38 @@ void tri_solve_chain(TriSolveHandle & thandle, const RowMapType row_map, const E
         node_count += lvl_nodes;
         //std::cout << "  echain: " << echain << "  lvl_nodes: " << lvl_nodes << "  updated node_count: " << node_count << std::endl;
 
+      // TODO Test this inside if-else vs here
+      Kokkos::fence();
+  #ifdef TRISOLVE_TIMERS
+     // full-solve time
+      time_iter = timer_chain_solve.seconds();
+      time_chain_solves += time_iter;
+      std::cout << "  chain iter: " << chain_ctr << "  time_iter = " << time_iter << std::endl;
+      //time_chain_solves += timer_chain_solve.seconds();
+  #endif
     } // end else
 
-    Kokkos::fence();
+    // TODO Test this inside if-else vs here
+    //Kokkos::fence();
+  #ifdef TRISOLVE_TIMERS
+     // fenced solve time
+     time_wrapped_ifelse += timer_wrap_ifelse.seconds();
+  #endif
   } // end for chainlink
+#ifdef TRISOLVE_TIMERS
+   // Total chain time
+   time_outer = timer_outer.seconds(); 
+
+  std::cout << "********************************" << std::endl; 
+  std::cout << "  tri_solve_chain: setup = " << time_setup << std::endl;
+  std::cout << "  tri_solve_chain: total loop = " << time_outer << std::endl;
+  std::cout << "  tri_solve_chain: full lvl solves = " << time_full_solves << std::endl;
+  std::cout << "      solve count = " << tp1_ctr << std::endl;
+  std::cout << "  tri_solve_chain: chain solves = " << time_chain_solves << std::endl;
+  std::cout << "      single-block solve count = " << chain_ctr << std::endl;
+  std::cout << "  tri_solve_chain: total if-else solve times = " << time_wrapped_ifelse << std::endl;
+  std::cout << "********************************" << std::endl; 
+#endif
 
 } // end tri_solve_chain
 

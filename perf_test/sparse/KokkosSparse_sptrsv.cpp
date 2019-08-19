@@ -188,6 +188,8 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
         break;
       case LVLSCHED_TP1:
         kh.create_sptrsv_handle(SPTRSVAlgorithm::SEQLVLSCHD_TP1, nrows, is_lower_tri);
+        std::cout << "TP1 set team_size = " << team_size << std::endl;
+        if (team_size != -1) kh.get_sptrsv_handle()->set_team_size(team_size);
         kh.get_sptrsv_handle()->print_algorithm();
         break;
       case LVLSCHED_TP1CHAIN:
@@ -199,6 +201,7 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
         break;
       case LVLSCHED_TP2:
         kh.create_sptrsv_handle(SPTRSVAlgorithm::SEQLVLSCHED_TP2, nrows, is_lower_tri);
+        if (team_size != -1) kh.get_sptrsv_handle()->set_team_size(team_size);
         kh.get_sptrsv_handle()->print_algorithm();
         break;
 #ifdef KOKKOSKERNELS_ENABLE_TPL_CUSPARSE
@@ -430,6 +433,8 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
         break;
       case LVLSCHED_TP1:
         kh.create_sptrsv_handle(SPTRSVAlgorithm::SEQLVLSCHD_TP1, nrows, is_lower_tri);
+        std::cout << "TP1 set team_size = " << team_size << std::endl;
+        if (team_size != -1) kh.get_sptrsv_handle()->set_team_size(team_size);
         kh.get_sptrsv_handle()->print_algorithm();
         break;
       case LVLSCHED_TP1CHAIN:
@@ -441,6 +446,7 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
         break;
       case LVLSCHED_TP2:
         kh.create_sptrsv_handle(SPTRSVAlgorithm::SEQLVLSCHED_TP2, nrows, is_lower_tri);
+        if (team_size != -1) kh.get_sptrsv_handle()->set_team_size(team_size);
         kh.get_sptrsv_handle()->print_algorithm();
         break;
 #ifdef KOKKOSKERNELS_ENABLE_TPL_CUSPARSE

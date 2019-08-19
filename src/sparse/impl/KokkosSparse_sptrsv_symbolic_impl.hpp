@@ -51,7 +51,8 @@
 #include <Kokkos_ArithTraits.hpp>
 #include <KokkosSparse_sptrsv_handle.hpp>
 
-#define LVL_OUTPUT_INFO
+//#define LVL_OUTPUT_INFO
+#define CHAIN_LVL_OUTPUT_INFO
 
 // TODO Pass values array and store diagonal entries - should this always be done or optional?
 
@@ -126,7 +127,7 @@ void symbolic_chain_phase(TriSolveHandle &thandle, const NPLViewType &nodes_per_
     }
   }
   thandle.set_num_chain_entries(num_chain_entries);
-#ifdef LVL_OUTPUT_INFO
+#ifdef CHAIN_LVL_OUTPUT_INFO
   std::cout << "  num_chain_entries = " << thandle.get_num_chain_entries() << std::endl;
   for ( size_type i = 0; i < num_chain_entries+1; ++i )
   {
@@ -408,6 +409,10 @@ void upper_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, co
 } // namespace KokkosSparse
 
 #ifdef LVL_OUTPUT_INFO
+#undef LVL_OUTPUT_INFO
+#endif
+
+#ifdef CHAIN_LVL_OUTPUT_INFO
 #undef LVL_OUTPUT_INFO
 #endif
 
