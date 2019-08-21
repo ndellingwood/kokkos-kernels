@@ -111,7 +111,9 @@ private:
   // Symbolic: Level scheduling data
   signed_nnz_lno_view_t level_list;
   nnz_lno_view_t nodes_per_level;
+  host_nnz_lno_view_t hnodes_per_level; // NEW
   nnz_lno_view_t nodes_grouped_by_level;
+  host_nnz_lno_view_t hnodes_grouped_by_level; // NEW
   size_type nlevel;
 
   int team_size;
@@ -177,7 +179,9 @@ public:
     algm(choice),
     level_list(),
     nodes_per_level(),
+    hnodes_per_level(),
     nodes_grouped_by_level(),
+    hnodes_grouped_by_level(),
     nlevel(0),
     team_size(-1),
     vector_size(-1),
@@ -255,7 +259,9 @@ public:
       level_list = signed_nnz_lno_view_t(Kokkos::ViewAllocateWithoutInitializing("level_list"), nrows_);
       Kokkos::deep_copy( level_list, signed_integral_t(-1) );
       nodes_per_level =  nnz_lno_view_t("nodes_per_level", nrows_);
+      hnodes_per_level = Kokkos::create_mirror_view(nodes_per_level);
       nodes_grouped_by_level = nnz_lno_view_t("nodes_grouped_by_level", nrows_);
+      hnodes_grouped_by_level = Kokkos::create_mirror_view(nodes_grouped_by_level);
     }
 
     // TODO Incorporate usage of this data into the algorithms
@@ -288,8 +294,10 @@ public:
         }
         else {
           // TODO Must set team_size when using chain - or should it be automatically set to chain_threshold?
-          std::cout << "  Error: team_size = " << this->team_size << "  chain_threshold = " << this->chain_threshold << std::endl;
-          throw std::runtime_error ("  sptrsv_handle.init_handle error: chain_threshold > team_size - this is an invalid pair of values for this algorithm");
+          std::cout << "  EXPERIMENTAL: team_size < chain_size: team_size = " << this->team_size << "  chain_threshold = " << this->chain_threshold << std::endl;
+          h_chain_ptr = host_signed_nnz_lno_view_t("h_chain_ptr", this->nrows);
+          //std::cout << "  Error: team_size = " << this->team_size << "  chain_threshold = " << this->chain_threshold << std::endl;
+          //throw std::runtime_error ("  sptrsv_handle.init_handle error: chain_threshold > team_size - this is an invalid pair of values for this algorithm");
         }
       }
     }
@@ -344,13 +352,16 @@ public:
 
   inline
   host_nnz_lno_view_t get_host_nodes_per_level() const { 
-    auto hnodes_per_level = Kokkos::create_mirror_view(this->nodes_per_level);
-    Kokkos::deep_copy(hnodes_per_level, this->nodes_per_level);
+//    auto hnodes_per_level = Kokkos::create_mirror_view(this->nodes_per_level);
+//    Kokkos::deep_copy(hnodes_per_level, this->nodes_per_level);
     return hnodes_per_level; 
   }
 
   KOKKOS_INLINE_FUNCTION
   nnz_lno_view_t get_nodes_grouped_by_level() const { return nodes_grouped_by_level; }
+
+  inline
+  host_nnz_lno_view_t get_host_nodes_grouped_by_level() const { return hnodes_grouped_by_level; }
 
   KOKKOS_INLINE_FUNCTION
   size_type get_nrows() const { return nrows; }
@@ -374,8 +385,10 @@ public:
         }
         else {
           // TODO Must set team_size when using chain - or should it be automatically set to chain_threshold?
-          std::cout << "  Error: team_size = " << this->team_size << "  chain_threshold = " << this->chain_threshold << std::endl;
-          throw std::runtime_error ("  sptrsv_handle.init_handle error: chain_threshold > team_size - this is an invalid pair of values for this algorithm");
+          std::cout << "  EXPERIMENTAL: team_size < chain_size: team_size = " << this->team_size << "  chain_threshold = " << this->chain_threshold << std::endl;
+          h_chain_ptr = host_signed_nnz_lno_view_t("h_chain_ptr", this->nrows);
+          //std::cout << "  Error: team_size = " << this->team_size << "  chain_threshold = " << this->chain_threshold << std::endl;
+          //throw std::runtime_error ("  sptrsv_handle.init_handle error: chain_threshold > team_size - this is an invalid pair of values for this algorithm");
         }
     }
   }

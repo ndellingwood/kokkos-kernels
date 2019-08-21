@@ -172,13 +172,19 @@ void lower_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, co
   auto entries = Kokkos::create_mirror_view(dentries);
   Kokkos::deep_copy(entries, dentries);
   
+  // get device view - will deep_copy to it at end of this host routine
   DeviceEntriesType dnodes_per_level = thandle.get_nodes_per_level();
-  HostEntriesType nodes_per_level = Kokkos::create_mirror_view(dnodes_per_level);
-  Kokkos::deep_copy(nodes_per_level, dnodes_per_level);
+// FIXME Use handles hnodes_per_level
+  auto nodes_per_level = thandle.get_host_nodes_per_level();
+//  HostEntriesType nodes_per_level = Kokkos::create_mirror_view(dnodes_per_level);
+//  Kokkos::deep_copy(nodes_per_level, dnodes_per_level);
 
+  // get device view - will deep_copy to it at end of this host routine
   DeviceEntriesType dnodes_grouped_by_level = thandle.get_nodes_grouped_by_level();
-  HostEntriesType nodes_grouped_by_level = Kokkos::create_mirror_view(dnodes_grouped_by_level);
-  Kokkos::deep_copy(nodes_grouped_by_level, dnodes_grouped_by_level);
+// FIXME Use handles hnodes_grouped_by_level
+  auto nodes_grouped_by_level = thandle.get_host_nodes_grouped_by_level();
+//  HostEntriesType nodes_grouped_by_level = Kokkos::create_mirror_view(dnodes_grouped_by_level);
+//  Kokkos::deep_copy(nodes_grouped_by_level, dnodes_grouped_by_level);
 
   DeviceSignedEntriesType dlevel_list = thandle.get_level_list();
   HostSignedEntriesType level_list = Kokkos::create_mirror_view(dlevel_list);
@@ -267,6 +273,7 @@ void lower_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, co
   { std::cout << "i: " << i << "  nodes_grouped_by_level = " << nodes_grouped_by_level(i) << std::endl; }
 #endif
 
+  // Deep copy to device views
   Kokkos::deep_copy(dnodes_grouped_by_level, nodes_grouped_by_level);
   Kokkos::deep_copy(dnodes_per_level, nodes_per_level);
   Kokkos::deep_copy(dlevel_list, level_list);
@@ -300,13 +307,19 @@ void upper_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, co
   auto entries = Kokkos::create_mirror_view(dentries);
   Kokkos::deep_copy(entries, dentries);
   
+  // get device view - will deep_copy to it at end of this host routine
   DeviceEntriesType dnodes_per_level = thandle.get_nodes_per_level();
-  HostEntriesType nodes_per_level = Kokkos::create_mirror_view(dnodes_per_level);
-  Kokkos::deep_copy(nodes_per_level, dnodes_per_level);
+// FIXME Use handles hnodes_per_level
+  auto nodes_per_level = thandle.get_host_nodes_per_level();
+//  HostEntriesType nodes_per_level = Kokkos::create_mirror_view(dnodes_per_level);
+//  Kokkos::deep_copy(nodes_per_level, dnodes_per_level);
 
+  // get device view - will deep_copy to it at end of this host routine
   DeviceEntriesType dnodes_grouped_by_level = thandle.get_nodes_grouped_by_level();
-  HostEntriesType nodes_grouped_by_level = Kokkos::create_mirror_view(dnodes_grouped_by_level);
-  Kokkos::deep_copy(nodes_grouped_by_level, dnodes_grouped_by_level);
+// FIXME Use handles hnodes_grouped_by_level
+  auto nodes_grouped_by_level = thandle.get_host_nodes_grouped_by_level();
+//  HostEntriesType nodes_grouped_by_level = Kokkos::create_mirror_view(dnodes_grouped_by_level);
+//  Kokkos::deep_copy(nodes_grouped_by_level, dnodes_grouped_by_level);
 
   DeviceSignedEntriesType dlevel_list = thandle.get_level_list();
   HostSignedEntriesType level_list = Kokkos::create_mirror_view(dlevel_list);
@@ -395,6 +408,7 @@ void upper_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, co
   { std::cout << "i: " << i << "  nodes_grouped_by_level = " << nodes_grouped_by_level(i) << std::endl; }
 #endif
 
+  // Deep copy to device views
   Kokkos::deep_copy(dnodes_grouped_by_level, nodes_grouped_by_level);
   Kokkos::deep_copy(dnodes_per_level, nodes_per_level);
   Kokkos::deep_copy(dlevel_list, level_list);

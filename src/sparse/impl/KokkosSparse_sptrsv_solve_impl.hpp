@@ -55,6 +55,11 @@
 //#define CHAIN_DEBUG_OUTPUT
 #define TRISOLVE_TIMERS
 
+#define KOKKOSPSTRSV_SOLVE_IMPL_PROFILE 1
+#if defined(KOKKOS_ENABLE_CUDA) && defined(KOKKOSPSTRSV_SOLVE_IMPL_PROFILE)
+#include "cuda_profiler_api.h"
+#endif
+
 namespace KokkosSparse {
 namespace Impl {
 namespace Experimental {
@@ -825,6 +830,8 @@ struct UpperTriLvlSchedTP1SingleBlockFunctor
 };
 
 
+struct LargerCutoffTag {};
+
 template <class RowMapType, class EntriesType, class ValuesType, class LHSType, class RHSType, class NGBLType>
 struct TriLvlSchedTP1SingleBlockFunctor
 {
@@ -846,11 +853,12 @@ struct TriLvlSchedTP1SingleBlockFunctor
   long lvl_start;
   long lvl_end;
   const bool is_lower;
+  const int  cutoff;
   // team_size: each team can be assigned a row, if there are enough rows...
 
 
-  TriLvlSchedTP1SingleBlockFunctor( const RowMapType &row_map_, const EntriesType &entries_, const ValuesType &values_, LHSType &lhs_, const RHSType &rhs_, const NGBLType &nodes_grouped_by_level_, NGBLType &nodes_per_level_, long node_count_, long lvl_start_, long lvl_end_, const bool is_lower_ ) :
-    row_map(row_map_), entries(entries_), values(values_), lhs(lhs_), rhs(rhs_), nodes_grouped_by_level(nodes_grouped_by_level_), nodes_per_level(nodes_per_level_), node_count(node_count_), lvl_start(lvl_start_), lvl_end(lvl_end_), is_lower(is_lower_) {}
+  TriLvlSchedTP1SingleBlockFunctor( const RowMapType &row_map_, const EntriesType &entries_, const ValuesType &values_, LHSType &lhs_, const RHSType &rhs_, const NGBLType &nodes_grouped_by_level_, NGBLType &nodes_per_level_, long node_count_, long lvl_start_, long lvl_end_, const bool is_lower_, const int cutoff_ = 0 ) :
+    row_map(row_map_), entries(entries_), values(values_), lhs(lhs_), rhs(rhs_), nodes_grouped_by_level(nodes_grouped_by_level_), nodes_per_level(nodes_per_level_), node_count(node_count_), lvl_start(lvl_start_), lvl_end(lvl_end_), is_lower(is_lower_), cutoff(cutoff_) {}
 
   // SingleBlock: Only one block (or league) executing; team_rank used to map thread to row
 
@@ -918,6 +926,75 @@ struct TriLvlSchedTP1SingleBlockFunctor
     } // end for lvl
   } // end operator
 
+
+  KOKKOS_INLINE_FUNCTION
+  void operator()( const LargerCutoffTag&, const member_type & team ) const {
+    long mut_node_count = node_count;
+      typename NGBLType::non_const_value_type rowid {0};
+      typename RowMapType::non_const_value_type soffset {0};
+      typename RowMapType::non_const_value_type eoffset {0};
+      typename RHSType::non_const_value_type rhs_val {0};
+      scalar_t diff = scalar_t(0.0);
+    for ( auto lvl = lvl_start; lvl < lvl_end; ++lvl ) {
+      auto nodes_this_lvl = nodes_per_level(lvl);
+      int my_team_rank = team.team_rank();
+#ifdef CHAIN_DEBUG_OUTPUT
+      printf("league_rank: %d  team_rank: %d  lvl: %ld  nodes_this_lvl: %ld\n", team.league_rank(), team.team_rank(), lvl, (long)nodes_this_lvl);
+#endif
+      diff = scalar_t(0.0);
+      // If cutoff > team_size, then a thread will be responsible for multiple rows - this may be a helpful scenario depending on occupancy etc.
+      for (int my_rank = my_team_rank; my_rank < cutoff; my_rank+=team.team_size() ) {
+       if (my_rank < nodes_this_lvl) {
+
+        // THIS is where the mapping of threadid to rowid happens
+        rowid = nodes_grouped_by_level(my_rank + mut_node_count);
+
+        soffset = row_map(rowid);
+        eoffset = row_map(rowid+1);
+        rhs_val = rhs(rowid);
+#ifdef CHAIN_DEBUG_OUTPUT
+        printf("league_rank: %d  team_rank: %d  node_count: %ld  lvl_start: %ld  lvl_end: %ld\n", team.league_rank(), team.team_rank(), mut_node_count, lvl_start, lvl_end);
+        printf("  team_rank: %d  mut_node_count: %ld  ngbl: %ld\n", team.team_rank(), mut_node_count, (long)rowid);
+        printf("  team_rank passed if: %d  rowid: %d  soffset: %d  eoffset: %d  rhs_val: %lf\n", team.team_rank(), (int)rowid, (int)soffset, (int)eoffset, rhs_val);
+#endif
+
+// FIXME NOTES:
+// Assumptions: 1. Each "thread" owns a row in the level
+//              2. At this point, the nested parallel_reduce is coordinating over all threads within the team!!!!! This is the bug in nt > 1 case.
+// FIX:
+//              Replace TeamThreadRange (which is allowing threads to cooperate over the solve...) with a for loop, then TeamVectorRange
+// Round 2: Use TeamVectorRange Policy
+
+        for (auto ptr = soffset; ptr < eoffset; ++ptr) {
+          auto colid = entries(ptr);
+          auto val   = values(ptr);
+#ifdef CHAIN_DEBUG_OUTPUT
+          printf("  ptr: %d  colid: %d  val: %lf  rank: %d\n", (int)ptr, (int)colid, val, team.team_rank());
+#endif
+          if ( colid != rowid ) {
+            diff -= val*lhs(colid);
+          }
+        }
+        // ASSUMPTION: sorted diagonal value located at eoffset - 1 for lower tri, soffset for upper tri
+        if (is_lower)
+          lhs(rowid) = (rhs_val+diff)/values(eoffset-1);
+        else
+          lhs(rowid) = (rhs_val+diff)/values(soffset);
+        // else if uppertri
+        //   lhs(rowid) = (rhs_val+diff)/values(soffset);
+
+       } // end if team.team_rank() < nodes_this_lvl
+      } // end for my_rank loop
+      {
+        // Update mut_node_count from nodes_per_level(lvl) each iteration of lvl per thread
+        mut_node_count += nodes_this_lvl;
+      }
+      team.team_barrier();
+    } // end for lvl
+  } // end tagged operator
+
+
+
 };
 
 
@@ -927,6 +1004,10 @@ struct TriLvlSchedTP1SingleBlockFunctor
 
 template < class TriSolveHandle, class RowMapType, class EntriesType, class ValuesType, class RHSType, class LHSType >
 void lower_tri_solve( TriSolveHandle & thandle, const RowMapType row_map, const EntriesType entries, const ValuesType values, const RHSType & rhs, LHSType &lhs) {
+
+#if defined(KOKKOS_ENABLE_CUDA) && defined(KOKKOSPSTRSV_SOLVE_IMPL_PROFILE)
+cudaProfilerStop();
+#endif
 
   typedef typename TriSolveHandle::execution_space execution_space;
   typedef typename TriSolveHandle::size_type size_type;
@@ -942,9 +1023,11 @@ void lower_tri_solve( TriSolveHandle & thandle, const RowMapType row_map, const 
 
   auto nlevels = thandle.get_num_levels();
   // Keep this a host View, create device version and copy to back to host during scheduling
+  // This requires making sure the host view in the handle is properly updated after the symbolic phase
   auto nodes_per_level = thandle.get_nodes_per_level();
-  auto hnodes_per_level = Kokkos::create_mirror_view(nodes_per_level);
-  Kokkos::deep_copy(hnodes_per_level, nodes_per_level);  
+  auto hnodes_per_level = thandle.get_host_nodes_per_level();
+  //auto hnodes_per_level = Kokkos::create_mirror_view(nodes_per_level);
+  //Kokkos::deep_copy(hnodes_per_level, nodes_per_level);  
 
   auto nodes_grouped_by_level = thandle.get_nodes_grouped_by_level();
 
@@ -964,6 +1047,9 @@ void lower_tri_solve( TriSolveHandle & thandle, const RowMapType row_map, const 
 #endif
     if ( lvl_nodes != 0 ) {
 
+#if defined(KOKKOS_ENABLE_CUDA) && defined(KOKKOSPSTRSV_SOLVE_IMPL_PROFILE)
+cudaProfilerStart();
+#endif
       if ( thandle.get_algorithm() == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_RP ) {
         Kokkos::parallel_for( "parfor_fixed_lvl", Kokkos::RangePolicy<execution_space>( node_count, node_count+lvl_nodes ), LowerTriLvlSchedRPSolverFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> (row_map, entries, values, lhs, rhs, nodes_grouped_by_level) );
       }
@@ -971,7 +1057,6 @@ void lower_tri_solve( TriSolveHandle & thandle, const RowMapType row_map, const 
         typedef Kokkos::TeamPolicy<execution_space> policy_type;
         int team_size = thandle.get_team_size();
     #ifdef TRISOLVE_TIMERS
-        std::cout << "  TP1 Upper team_size = " << team_size << std::endl;
         tp1_ctr++;
     #endif
 
@@ -1007,6 +1092,9 @@ void lower_tri_solve( TriSolveHandle & thandle, const RowMapType row_map, const 
 
       node_count += lvl_nodes;
 
+#if defined(KOKKOS_ENABLE_CUDA) && defined(KOKKOSPSTRSV_SOLVE_IMPL_PROFILE)
+cudaProfilerStop();
+#endif
     } // end if
 #ifdef TRISOLVE_TIMERS
     // FIXME Adding Kokkos::fence() for timing purposes - is it necessary if running on a single stream???
@@ -1031,6 +1119,9 @@ void lower_tri_solve( TriSolveHandle & thandle, const RowMapType row_map, const 
 template < class TriSolveHandle, class RowMapType, class EntriesType, class ValuesType, class RHSType, class LHSType >
 void upper_tri_solve( TriSolveHandle & thandle, const RowMapType row_map, const EntriesType entries, const ValuesType values, const RHSType & rhs, LHSType &lhs) {
 
+#if defined(KOKKOS_ENABLE_CUDA) && defined(KOKKOSPSTRSV_SOLVE_IMPL_PROFILE)
+cudaProfilerStop();
+#endif
   typedef typename TriSolveHandle::execution_space execution_space;
   typedef typename TriSolveHandle::size_type size_type;
   typedef typename TriSolveHandle::nnz_lno_view_t NGBLType;
@@ -1045,9 +1136,11 @@ void upper_tri_solve( TriSolveHandle & thandle, const RowMapType row_map, const 
 
   auto nlevels = thandle.get_num_levels();
   // Keep this a host View, create device version and copy to back to host during scheduling
+  // This requires making sure the host view in the handle is properly updated after the symbolic phase
   auto nodes_per_level = thandle.get_nodes_per_level();
-  auto hnodes_per_level = Kokkos::create_mirror_view(nodes_per_level);
-  Kokkos::deep_copy(hnodes_per_level, nodes_per_level);
+  auto hnodes_per_level = thandle.get_host_nodes_per_level();
+  //auto hnodes_per_level = Kokkos::create_mirror_view(nodes_per_level);
+  //Kokkos::deep_copy(hnodes_per_level, nodes_per_level);
 
   auto nodes_grouped_by_level = thandle.get_nodes_grouped_by_level();
 
@@ -1067,6 +1160,9 @@ void upper_tri_solve( TriSolveHandle & thandle, const RowMapType row_map, const 
     timer_inner.reset();
 #endif
     if ( lvl_nodes != 0 ) {
+#if defined(KOKKOS_ENABLE_CUDA) && defined(KOKKOSPSTRSV_SOLVE_IMPL_PROFILE)
+cudaProfilerStart();
+#endif
 
       if ( thandle.get_algorithm() == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_RP ) {
         Kokkos::parallel_for( "parfor_fixed_lvl", Kokkos::RangePolicy<execution_space>( node_count, node_count+lvl_nodes ), UpperTriLvlSchedRPSolverFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> (row_map, entries, values, lhs, rhs, nodes_grouped_by_level) );
@@ -1076,7 +1172,6 @@ void upper_tri_solve( TriSolveHandle & thandle, const RowMapType row_map, const 
 
         int team_size = thandle.get_team_size();
     #ifdef TRISOLVE_TIMERS
-        std::cout << "  TP1 Upper team_size = " << team_size << std::endl;
         tp1_ctr++;
     #endif
 
@@ -1112,6 +1207,9 @@ void upper_tri_solve( TriSolveHandle & thandle, const RowMapType row_map, const 
 
       node_count += lvl_nodes;
 
+#if defined(KOKKOS_ENABLE_CUDA) && defined(KOKKOSPSTRSV_SOLVE_IMPL_PROFILE)
+cudaProfilerStop();
+#endif
     } // end if
 #ifdef TRISOLVE_TIMERS
     // FIXME Adding Kokkos::fence() for timing purposes - is it necessary if running on a single stream???
@@ -1135,6 +1233,9 @@ void upper_tri_solve( TriSolveHandle & thandle, const RowMapType row_map, const 
 template < class TriSolveHandle, class RowMapType, class EntriesType, class ValuesType, class RHSType, class LHSType >
 void tri_solve_chain(TriSolveHandle & thandle, const RowMapType row_map, const EntriesType entries, const ValuesType values, const RHSType & rhs, LHSType &lhs, const bool is_lower) {
 
+#if defined(KOKKOS_ENABLE_CUDA) && defined(KOKKOSPSTRSV_SOLVE_IMPL_PROFILE)
+cudaProfilerStop();
+#endif
   typedef typename TriSolveHandle::execution_space execution_space;
   typedef typename TriSolveHandle::size_type size_type;
   typedef typename TriSolveHandle::nnz_lno_view_t NGBLType;
@@ -1157,9 +1258,11 @@ void tri_solve_chain(TriSolveHandle & thandle, const RowMapType row_map, const E
   size_type num_chain_entries = thandle.get_num_chain_entries();
 
   // Keep this a host View, create device version and copy to back to host during scheduling
+  // This requires making sure the host view in the handle is properly updated after the symbolic phase
   auto nodes_per_level = thandle.get_nodes_per_level();
-  auto hnodes_per_level = Kokkos::create_mirror_view(nodes_per_level);
-  Kokkos::deep_copy(hnodes_per_level, nodes_per_level);
+  auto hnodes_per_level = thandle.get_host_nodes_per_level();
+  //auto hnodes_per_level = Kokkos::create_mirror_view(nodes_per_level);
+  //Kokkos::deep_copy(hnodes_per_level, nodes_per_level);
 
   auto nodes_grouped_by_level = thandle.get_nodes_grouped_by_level();
 
@@ -1195,6 +1298,9 @@ void tri_solve_chain(TriSolveHandle & thandle, const RowMapType row_map, const E
       timer_full_solve.reset();
   #endif
 
+#if defined(KOKKOS_ENABLE_CUDA) && defined(KOKKOSPSTRSV_SOLVE_IMPL_PROFILE)
+cudaProfilerStart();
+#endif
         if (is_lower) {
           // TODO Time changes between merged functor and individuals
           //LowerTriLvlSchedTP1SolverFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, node_count);
@@ -1212,6 +1318,9 @@ void tri_solve_chain(TriSolveHandle & thandle, const RowMapType row_map, const E
           else
             Kokkos::parallel_for("parfor_u_team_chain1", policy_type( lvl_nodes , team_size ), tstf);
         }
+#if defined(KOKKOS_ENABLE_CUDA) && defined(KOKKOSPSTRSV_SOLVE_IMPL_PROFILE)
+cudaProfilerStop();
+#endif
 
         // echain is offset into level... ??
         node_count += lvl_nodes;
@@ -1233,6 +1342,7 @@ void tri_solve_chain(TriSolveHandle & thandle, const RowMapType row_map, const E
         size_type lvl_nodes = 0;
 
         typedef Kokkos::TeamPolicy<execution_space> policy_type;
+        typedef Kokkos::TeamPolicy<LargerCutoffTag, execution_space> large_cutoff_policy_type;
         auto cutoff = thandle.get_chain_threshold();
         const int team_size = cutoff;
   #ifdef TRISOLVE_TIMERS
@@ -1245,17 +1355,39 @@ void tri_solve_chain(TriSolveHandle & thandle, const RowMapType row_map, const E
   #endif
 //        const int team_size = std::is_same<typename Kokkos::DefaultExecutionSpace::memory_space, Kokkos::HostSpace>::value ? 1 : 256; // TODO chainlink cutoff hard-coded to 256: make this a "threshold" parameter in the handle
 
+#if defined(KOKKOS_ENABLE_CUDA) && defined(KOKKOSPSTRSV_SOLVE_IMPL_PROFILE)
+cudaProfilerStart();
+#endif
         if (is_lower) {
-//          TriLvlSchedTP1SingleBlockFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, nodes_per_level, node_count, schain, echain, true);
-          LowerTriLvlSchedTP1SingleBlockFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, nodes_per_level, node_count, schain, echain);
-          Kokkos::parallel_for("parfor_l_team_chainmulti", policy_type( 1, team_size ), tstf);
+          if (cutoff <= team_size) {
+            TriLvlSchedTP1SingleBlockFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, nodes_per_level, node_count, schain, echain, true);
+//          LowerTriLvlSchedTP1SingleBlockFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, nodes_per_level, node_count, schain, echain);
+            Kokkos::parallel_for("parfor_l_team_chainmulti", policy_type( 1, team_size ), tstf);
+          }
+          else {
+            // team_size < cutoff => kernel must allow for a block-stride internally
+            TriLvlSchedTP1SingleBlockFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, nodes_per_level, node_count, schain, echain, true, cutoff);
+//          LowerTriLvlSchedTP1SingleBlockFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, nodes_per_level, node_count, schain, echain);
+            Kokkos::parallel_for("parfor_l_team_chainmulti_cutoff", large_cutoff_policy_type( 1, team_size ), tstf);
+          }
         }
         else {
-//          TriLvlSchedTP1SingleBlockFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, nodes_per_level, node_count, schain, echain, false);
-          UpperTriLvlSchedTP1SingleBlockFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, nodes_per_level, node_count, schain, echain);
-          Kokkos::parallel_for("parfor_u_team_chainmulti", policy_type( 1, team_size ), tstf);
+          if (cutoff <= team_size) {
+            TriLvlSchedTP1SingleBlockFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, nodes_per_level, node_count, schain, echain, false);
+//          UpperTriLvlSchedTP1SingleBlockFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, nodes_per_level, node_count, schain, echain);
+            Kokkos::parallel_for("parfor_u_team_chainmulti", policy_type( 1, team_size ), tstf);
+          }
+          else {
+            // team_size < cutoff => kernel must allow for a block-stride internally
+            TriLvlSchedTP1SingleBlockFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, nodes_per_level, node_count, schain, echain, false, cutoff);
+//          UpperTriLvlSchedTP1SingleBlockFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, nodes_per_level, node_count, schain, echain);
+            Kokkos::parallel_for("parfor_u_team_chainmulti_cutoff", large_cutoff_policy_type( 1, team_size ), tstf);
+          }
         }
 
+#if defined(KOKKOS_ENABLE_CUDA) && defined(KOKKOSPSTRSV_SOLVE_IMPL_PROFILE)
+cudaProfilerStop();
+#endif
         for (size_type i = schain; i < echain; ++i) {
           lvl_nodes += hnodes_per_level(i);
         }
