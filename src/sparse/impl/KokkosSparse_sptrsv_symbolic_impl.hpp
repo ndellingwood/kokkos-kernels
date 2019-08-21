@@ -157,7 +157,7 @@ void lower_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, co
   typedef typename TriSolveHandle::size_type size_type;
 
   typedef typename TriSolveHandle::nnz_lno_view_t  DeviceEntriesType;
-  typedef typename TriSolveHandle::nnz_lno_view_t::HostMirror HostEntriesType;
+  //typedef typename TriSolveHandle::nnz_lno_view_t::HostMirror HostEntriesType;
 
   typedef typename TriSolveHandle::signed_nnz_lno_view_t DeviceSignedEntriesType;
   typedef typename TriSolveHandle::signed_nnz_lno_view_t::HostMirror HostSignedEntriesType;
@@ -292,7 +292,7 @@ void upper_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, co
   typedef typename TriSolveHandle::size_type size_type;
 
   typedef typename TriSolveHandle::nnz_lno_view_t  DeviceEntriesType;
-  typedef typename TriSolveHandle::nnz_lno_view_t::HostMirror HostEntriesType;
+  //typedef typename TriSolveHandle::nnz_lno_view_t::HostMirror HostEntriesType;
 
   typedef typename TriSolveHandle::signed_nnz_lno_view_t DeviceSignedEntriesType;
   typedef typename TriSolveHandle::signed_nnz_lno_view_t::HostMirror HostSignedEntriesType;

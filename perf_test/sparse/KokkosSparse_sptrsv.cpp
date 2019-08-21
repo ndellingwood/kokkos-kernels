@@ -70,6 +70,8 @@ using namespace KokkosSparse::Experimental;
 using namespace KokkosKernels;
 using namespace KokkosKernels::Experimental;
 
+//#define PRINT_HLEVEL_FREQ_PLOT
+
 enum {DEFAULT, CUSPARSE, LVLSCHED_RP, LVLSCHED_TP1, LVLSCHED_TP2, LVLSCHED_TP1CHAIN};
 
 
@@ -213,10 +215,11 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
         //cusparse_matvec(A, x, y, rows_per_thread, team_size, vector_length);
         break;
 #else
-        std::cout << "CUSPARSE NOT ENABLED - fall through to default" << std::endl;
+        std::cout << "CUSPARSE not enabled: Fall through to defaults" << std::endl;
 #endif
       default:
         kh.create_sptrsv_handle(SPTRSVAlgorithm::SEQLVLSCHD_TP1, nrows, is_lower_tri);
+        if (team_size != -1) kh.get_sptrsv_handle()->set_team_size(team_size);
         kh.get_sptrsv_handle()->print_algorithm();
     }
 
@@ -322,6 +325,7 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
     std::cout << "LOOP_MIN_TIME:  " << min_time << std::endl;
 
     // Output for level frequency plot
+    #ifdef PRINT_HLEVEL_FREQ_PLOT
     auto hnpl = kh.get_sptrsv_handle()->get_host_nodes_per_level();
     auto nlevels = kh.get_sptrsv_handle()->get_num_levels();
     std::string algmstring = kh.get_sptrsv_handle()->return_algorithm_string();
@@ -340,6 +344,8 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
     else {
       std::cout << "OUTFILE DID NOT OPEN!!!" << std::endl;
     }
+    #endif
+
   }
 
 #ifdef KOKKOSKERNELS_ENABLE_TPL_CUSPARSE
@@ -463,10 +469,11 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
         //cusparse_matvec(A, x, y, rows_per_thread, team_size, vector_length);
         break;
 #else
-        std::cout << "CUSPARSE NOT ENABLED - fall through to default" << std::endl;
+        std::cout << "CUSPARSE not enabled: Fall through to defaults" << std::endl;
 #endif
       default:
         kh.create_sptrsv_handle(SPTRSVAlgorithm::SEQLVLSCHD_TP1, nrows, is_lower_tri);
+        if (team_size != -1) kh.get_sptrsv_handle()->set_team_size(team_size);
         kh.get_sptrsv_handle()->print_algorithm();
     }
 
@@ -570,6 +577,7 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
     std::cout << "LOOP_MIN_TIME:  " << min_time << std::endl;
 
     // Output for level frequency plot
+    #ifdef PRINT_HLEVEL_FREQ_PLOT
     auto hnpl = kh.get_sptrsv_handle()->get_host_nodes_per_level();
     auto nlevels = kh.get_sptrsv_handle()->get_num_levels();
     std::string algmstring = kh.get_sptrsv_handle()->return_algorithm_string();
@@ -588,6 +596,7 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
     else {
       std::cout << "OUTFILE DID NOT OPEN!!!" << std::endl;
     }
+    #endif
   }
 
 #ifdef KOKKOSKERNELS_ENABLE_TPL_CUSPARSE
