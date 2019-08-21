@@ -130,11 +130,12 @@ private:
   // Symbolic and Numeric: Dense-block data structures
   /*
   // TODO Should the dense-block stuff be stored in its own data structure?
+  // KokkosBlas::gemv expects rank2 view for the matrix
   typedef typename Kokkos::View<nnz_scalar_t **, HandlePersistentMemorySpace> mtx_scalar_view_t;
   size_type row_threshold_cutoff;
   mtx_scalar_view_t dense_matrix_block;
-  mtx_scalar_view_t dense_triangular_block;
-  nnz_scalar_view_t dense_vector_block;
+  mtx_scalar_view_t dense_triangular_block; // 2D storage is inefficient for this matrix, but fits cuBLAS pattern...
+  nnz_scalar_view_t dense_vector_block; // Make this a copy of subview of the original view
 
   bool require_symbolic_denseblock_phase;
   bool symbolic_denseblock_correction_complete;

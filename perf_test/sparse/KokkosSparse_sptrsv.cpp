@@ -204,13 +204,16 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
       case LVLSCHED_TP2:
         kh.create_sptrsv_handle(SPTRSVAlgorithm::SEQLVLSCHED_TP2, nrows, is_lower_tri);
         if (team_size != -1) kh.get_sptrsv_handle()->set_team_size(team_size);
+        if (vector_length != -1) kh.get_sptrsv_handle()->set_vector_size(vector_length);
         kh.get_sptrsv_handle()->print_algorithm();
         break;
-#ifdef KOKKOSKERNELS_ENABLE_TPL_CUSPARSE
       case CUSPARSE:
+#ifdef KOKKOSKERNELS_ENABLE_TPL_CUSPARSE
         std::cout << "CUSPARSE: No kk interface added yet" << std::endl;
         //cusparse_matvec(A, x, y, rows_per_thread, team_size, vector_length);
         break;
+#else
+        std::cout << "CUSPARSE NOT ENABLED - fall through to default" << std::endl;
 #endif
       default:
         kh.create_sptrsv_handle(SPTRSVAlgorithm::SEQLVLSCHD_TP1, nrows, is_lower_tri);
@@ -451,13 +454,16 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
       case LVLSCHED_TP2:
         kh.create_sptrsv_handle(SPTRSVAlgorithm::SEQLVLSCHED_TP2, nrows, is_lower_tri);
         if (team_size != -1) kh.get_sptrsv_handle()->set_team_size(team_size);
+        if (vector_length != -1) kh.get_sptrsv_handle()->set_vector_size(vector_length);
         kh.get_sptrsv_handle()->print_algorithm();
         break;
-#ifdef KOKKOSKERNELS_ENABLE_TPL_CUSPARSE
       case CUSPARSE:
+#ifdef KOKKOSKERNELS_ENABLE_TPL_CUSPARSE
         std::cout << "CUSPARSE: No kk interface added yet" << std::endl;
         //cusparse_matvec(A, x, y, rows_per_thread, team_size, vector_length);
         break;
+#else
+        std::cout << "CUSPARSE NOT ENABLED - fall through to default" << std::endl;
 #endif
       default:
         kh.create_sptrsv_handle(SPTRSVAlgorithm::SEQLVLSCHD_TP1, nrows, is_lower_tri);
