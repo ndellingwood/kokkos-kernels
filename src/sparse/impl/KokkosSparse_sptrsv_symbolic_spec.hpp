@@ -125,6 +125,12 @@ struct SPTRSV_SYMBOLIC<KernelHandle, RowMapType, EntriesType, false, KOKKOSKERNE
   {
     auto sptrsv_handle = handle->get_sptrsv_handle();
 
+#ifdef DENSEPARTITION
+    if ( sptrsv_handle->get_algorithm() == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_DENSEP_TP1 ) {
+      Experimental::symbolic_dense_partition_algm(*sptrsv_handle, row_map, entries);
+      sptrsv_handle->set_symbolic_complete();
+    } else {
+#endif
     if ( sptrsv_handle->is_lower_tri() ) {
       Experimental::lower_tri_symbolic(*sptrsv_handle, row_map, entries);
       sptrsv_handle->set_symbolic_complete();
@@ -133,6 +139,9 @@ struct SPTRSV_SYMBOLIC<KernelHandle, RowMapType, EntriesType, false, KOKKOSKERNE
       Experimental::upper_tri_symbolic(*sptrsv_handle, row_map, entries);
       sptrsv_handle->set_symbolic_complete();
     }
+#ifdef DENSEPARTITION
+    }
+#endif
   }
 
 };

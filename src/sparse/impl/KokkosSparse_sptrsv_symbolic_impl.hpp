@@ -52,7 +52,7 @@
 #include <KokkosSparse_sptrsv_handle.hpp>
 
 //#define LVL_OUTPUT_INFO
-#define CHAIN_LVL_OUTPUT_INFO
+//#define CHAIN_LVL_OUTPUT_INFO
 
 // TODO Pass values array and store diagonal entries - should this always be done or optional?
 
@@ -147,8 +147,11 @@ void symbolic_chain_phase(TriSolveHandle &thandle, const NPLViewType &nodes_per_
 } // end symbolic_chain_phase
 
 
+
+
+
 template < class TriSolveHandle, class RowMapType, class EntriesType >
-void lower_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, const EntriesType dentries) {
+void lower_tri_symbolic (TriSolveHandle &thandle, const RowMapType drow_map, const EntriesType dentries) {
 
  if ( thandle.algm_requires_symb_lvlsched() )
  {
@@ -164,7 +167,8 @@ void lower_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, co
 
   typedef typename TriSolveHandle::signed_integral_t signed_integral_t;
 
-  size_type nrows = thandle.get_nrows();
+//  size_type nrows = thandle.get_nrows();
+  size_type nrows = drow_map.extent(0)-1;
 
   auto row_map = Kokkos::create_mirror_view(drow_map);
   Kokkos::deep_copy(row_map, drow_map);
@@ -299,7 +303,8 @@ void upper_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, co
 
   typedef typename TriSolveHandle::signed_integral_t signed_integral_t;
 
-  size_type nrows = thandle.get_nrows();
+//  size_type nrows = thandle.get_nrows();
+  size_type nrows = drow_map.extent(0)-1;
 
   auto row_map = Kokkos::create_mirror_view(drow_map);
   Kokkos::deep_copy(row_map, drow_map);
@@ -416,6 +421,118 @@ void upper_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, co
  }
 } // end upper_tri_symbolic
 
+#ifdef DENSEPARTITION
+template < class TriSolveHandle, class RowMapType, class EntriesType >
+void symbolic_dense_partition_algm( TriSolveHandle &thandle, const RowMapType drow_map, const EntriesType dentries) {
+
+  // TODO Should I have the outer/public symbolic phase call this routine for the partition-type algorithms, create subviews and then call
+  // the level scheduling based routines?
+
+  // TODO Where should this partition_phase be called? I will reuse the existing symbolic routines on the sparse partition of the matrix,
+  // but I intend to use subviews for that
+  // TODO Allocate dense mtx and tri here, or in the handle initialization? Will need to reset if symbolic is called again with different params, but the handle should be reset in that case anyway...
+  typedef typename TriSolveHandle::size_type size_type;
+
+  // TODO Symbolic should be called once - determines level_list, nodes_grouped_by_level, nodes_per_level for a fixed structure; allocates the views for dense matrix copies
+  //          subviews for the sparse partitions will need to be created here to determine data mentioned above
+  //          symbolic does not use the CRS vals array - so a change of the values but not structure does not require recalling symbolic
+  //
+  //      Current sptrsv requires:
+  //        create handle
+  //          stores lower vs upper, algm choice, nrows, algm-specific views (level_list, host_chain_ptr, etc)
+  //
+  //        sptrsv_symbolic(handle, rowmap, entries);
+  //          analysis stores data for level schedule, chain_ptr, etc
+  //          dense partition: allocate
+  //
+  //        sptrsv_numeric(handle, rowmap, entries, vals);
+  //          populate the dense partition views (on device) stored in handle, 
+  //
+  //        sptrsv_solve(handle, rowmap, entries, vals, b, x)
+  //        TODO Add interface taking CrsMatrix input?
+  //          Reuse: simply pass different vals View
+  //          dense partition: Call sptrsv_solve on sparse partition subviews; fence; gemv on dense mtx, overwrite x; dense trsv on dense tri, overwritten x subview as rhs b, re-overwrite subview of x for final result
+  //
+  //        destroy handle
+  //
+  //
+  auto dense_start_row = thandle.get_dense_start_row();
+
+  // FIXME Inefficient way to get this value, do this in the handle? Otherwise, store it in the handle?
+  auto h_row_map = Kokkos::create_mirror_view(drow_map);
+  Kokkos::deep_copy(h_row_map, drow_map);
+  auto num_spentries = h_row_map(dense_start_row); // number of items (nnz) from the entries array in the sparse partition
+
+  thandle.set_num_sparse_part_nnz(num_spentries);
+
+  auto sprow_map = Kokkos::subview(drow_map, Kokkos::pair<size_type,size_type>(0, dense_start_row+1));
+  // Need the offset into entries and vals; for sparse partition want the range [ 0, drow_map(dense_start_row) )
+  auto spentries = Kokkos::subview(dentries, Kokkos::pair<size_type,size_type>(0, num_spentries));
+  if (thandle.is_lower_tri()) {
+    lower_tri_symbolic(thandle, sprow_map, spentries);
+  }
+  else {
+    upper_tri_symbolic(thandle, sprow_map, spentries);
+  }
+}
+
+
+template < class TriSolveHandle, class RowMapType, class EntriesType, class ValuesType >
+void numeric_dense_partition_algm(TriSolveHandle &thandle, const RowMapType drow_map, const EntriesType dentries, const ValuesType dvals) {
+
+  typedef typename TriSolveHandle::size_type size_type;
+
+  auto dense_start_row = thandle.get_dense_start_row();
+
+  auto cprow_map = Kokkos::subview(drow_map, Kokkos::pair<size_type,size_type>(dense_start_row, drow_map.extent(0)));
+
+  // Very inefficient, but need the offset?
+  //auto h_row_map = Kokkos::create_mirror_view(drow_map);
+  //Kokkos::deep_copy(h_row_map, drow_map);
+
+  //auto cp_entries_start = h_row_map(dense_start_row+1);
+  //auto cp_entries_end = h_row_map(drow_map.extent(0));
+
+  // Need the offset into entries and vals; for dense partition want the range [ drow_map(dense_start_row+1), end )
+  //auto cpentries = Kokkos::subview(dentries, Kokkos::pair<size_type,size_type>(cp_entries_start, cp_entries_end)); // this is for dense portion
+  //auto cpvals = Kokkos::subview(dvals, Kokkos::pair<size_type,size_type>(cp_entries_start, cp_entries_end)); // this is for dense portion
+
+  // Fill the dense_mtx
+  auto dense_mtx = thandle.get_dense_mtx_partition();
+  auto dense_tri = thandle.get_dense_tri_partition();
+
+  // TODO If resetting the matrix values, but structure the same, need to re-zero the dense matrices
+  // TODO Zero the matrices here, and alloc without initializing in handle (or symbolic)?
+  Kokkos::deep_copy(dense_mtx, 0);
+  Kokkos::deep_copy(dense_tri, 0);
+
+  auto dense_mtx_rows = dense_mtx.extent(0);
+  auto dense_mtx_cols = dense_mtx.extent(1);
+
+//  auto num_tri_rows = dense_tri.extent(0);
+//  auto num_tri_cols = dense_tri.extent(1);
+
+
+  // Simple range_policy to parallelize over rows; can try out team_policy, assigning team to row and coordinating threads over the writes since matrix is dense, no conflicts
+  // that may expose more parallelism
+  Kokkos::parallel_for("numeric fill dense matrices", Kokkos::RangePolicy<typename TriSolveHandle::execution_space>(0, dense_mtx_rows), KOKKOS_LAMBDA(const size_type rowid) {
+    // Assume entries and vals are ordered...
+    auto offset_begin = cprow_map(rowid); // this is using the shifted rowid in the subview of row_map; the offset returned is that for the ORIGINAL entries and vals
+    auto offset_end   = cprow_map(rowid+1);
+    for (size_type offset = offset_begin; offset < offset_end; ++offset) {
+      size_t colid = dentries(offset); // original global colid - use this for dense_mtx, but map it to start at 0 for the dense_tri matrix
+      if (colid < dense_mtx_cols) {
+        dense_mtx(rowid,colid) = dvals(offset);
+      }
+      else {
+        dense_tri(rowid, colid-dense_start_row) = dvals(offset);
+      }
+    }
+  });
+
+  thandle.set_numeric_complete();
+}
+#endif
 
 
 } // namespace Experimental

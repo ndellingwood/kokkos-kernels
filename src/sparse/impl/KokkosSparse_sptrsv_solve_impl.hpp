@@ -53,7 +53,7 @@
 
 //#define LVL_OUTPUT_INFO
 //#define CHAIN_DEBUG_OUTPUT
-#define TRISOLVE_TIMERS
+//#define TRISOLVE_TIMERS
 
 #define KOKKOSPSTRSV_SOLVE_IMPL_PROFILE 1
 #if defined(KOKKOS_ENABLE_CUDA) && defined(KOKKOSPSTRSV_SOLVE_IMPL_PROFILE)
@@ -64,6 +64,11 @@ namespace KokkosSparse {
 namespace Impl {
 namespace Experimental {
 
+//#ifdef DENSEPARTITION
+#if defined(KOKKOS_ENABLED_CUDA)
+#include "cuda_runtime.h"
+#include "cublas_v2.h"
+#endif
 
 struct UnsortedTag {};
 
@@ -1268,9 +1273,9 @@ cudaProfilerStop();
 
   size_type node_count = 0;
 #ifdef TRISOLVE_TIMERS
-   // prep time
-   time_setup = timer_setup.seconds(); 
-   timer_outer.reset();
+  // prep time
+  time_setup = timer_setup.seconds(); 
+  timer_outer.reset();
 #endif
   
   for ( size_type chainlink = 0; chainlink < num_chain_entries; ++chainlink ) {
@@ -1279,7 +1284,7 @@ cudaProfilerStop();
 
   #ifdef TRISOLVE_TIMERS
      // fenced solve time
-     timer_wrap_ifelse.reset();
+    timer_wrap_ifelse.reset();
   #endif
     if ( echain - schain == 1 ) {
       //std::cout << "Call regular single-link TP - chainlink: " << chainlink << std::endl;
@@ -1428,6 +1433,285 @@ cudaProfilerStop();
 #endif
 
 } // end tri_solve_chain
+
+
+#ifdef DENSEPARTITION
+template < class TriSolveHandle, class RowMapType, class EntriesType, class ValuesType, class RHSType, class LHSType >
+void tri_solve_partition_dense(TriSolveHandle & thandle, const RowMapType frow_map, const EntriesType fentries, const ValuesType fvalues, const RHSType & frhs, LHSType & flhs, const bool is_lower) {
+
+  typedef typename TriSolveHandle::execution_space execution_space;
+  typedef typename TriSolveHandle::size_type size_type;
+  typedef typename TriSolveHandle::nnz_lno_view_t NGBLType;
+
+// Partitioned matrix tri solve
+// 1. Solve the sparse portion as before - symbolic was already conducted using subview matrices for this
+//    - Will require taking subviews of the input arrays
+//    - fence()
+// 2. gemv on dense block, using results from (1)
+// 3. dense trisolve for remaining dense portion of x - use x as rhs and lhs in this step
+//    - will require a cublas impl, or pre-computing L^-1 on host, copying, and applying as gemv
+
+
+// Part 1. Sparse partition of the matrix, computation done as in other algorithms, just need to take subviews of the input view arrays
+  auto dense_start_row = thandle.get_dense_start_row();
+  auto num_spentries = thandle.get_num_sparse_part_nnz();
+
+  auto row_map = Kokkos::subview(frow_map, Kokkos::pair<size_type,size_type>(0, dense_start_row+1));
+  // Need the offset into entries and vals; for sparse partition want the range [ 0, drow_map(dense_start_row) )
+  auto entries = Kokkos::subview(fentries, Kokkos::pair<size_type,size_type>(0, num_spentries));
+  auto values = Kokkos::subview(fvalues, Kokkos::pair<size_type,size_type>(0, num_spentries));
+
+  auto rhs = Kokkos::subview(frhs, Kokkos::pair<size_type,size_type>(0, dense_start_row));
+  auto lhs = Kokkos::subview(flhs, Kokkos::pair<size_type,size_type>(0, dense_start_row));
+
+#if defined(KOKKOS_ENABLE_CUDA) && defined(KOKKOSPSTRSV_SOLVE_IMPL_PROFILE)
+cudaProfilerStop();
+#endif
+#ifdef TRISOLVE_TIMERS
+  double time_outer = 0.0, time_full_solves = 0.0, time_chain_solves = 0.0, time_setup = 0.0, time_wrapped_ifelse = 0.0;
+
+  int tp1_ctr = 0, chain_ctr = 0;
+
+  double time_iter = 0.0;
+
+  Kokkos::Timer timer_outer;
+  Kokkos::Timer timer_full_solve;
+  Kokkos::Timer timer_chain_solve;
+  Kokkos::Timer timer_wrap_ifelse;
+  Kokkos::Timer timer_setup;
+#endif
+  // Algorithm is checked before this function is called
+  auto h_chain_ptr = thandle.get_host_chain_ptr();
+  size_type num_chain_entries = thandle.get_num_chain_entries();
+
+  // Keep this a host View, create device version and copy to back to host during scheduling
+  // This requires making sure the host view in the handle is properly updated after the symbolic phase
+  auto nodes_per_level = thandle.get_nodes_per_level();
+  auto hnodes_per_level = thandle.get_host_nodes_per_level();
+  //auto hnodes_per_level = Kokkos::create_mirror_view(nodes_per_level);
+  //Kokkos::deep_copy(hnodes_per_level, nodes_per_level);
+
+  auto nodes_grouped_by_level = thandle.get_nodes_grouped_by_level();
+
+  size_type node_count = 0;
+#ifdef TRISOLVE_TIMERS
+  // prep time
+  time_setup = timer_setup.seconds(); 
+  timer_outer.reset();
+#endif
+  
+  for ( size_type chainlink = 0; chainlink < num_chain_entries; ++chainlink ) {
+    size_type schain = h_chain_ptr(chainlink);
+    size_type echain = h_chain_ptr(chainlink+1);
+
+  #ifdef TRISOLVE_TIMERS
+     // fenced solve time
+    timer_wrap_ifelse.reset();
+  #endif
+    if ( echain - schain == 1 ) {
+      //std::cout << "Call regular single-link TP - chainlink: " << chainlink << std::endl;
+      // run normal algm as this is a single level
+      // schain should.... map to the level....
+        typedef Kokkos::TeamPolicy<execution_space> policy_type;
+        int team_size = thandle.get_team_size();
+
+        size_type lvl_nodes = hnodes_per_level(schain); //lvl == echain????
+  #ifdef TRISOLVE_TIMERS
+      // full-solve time
+      tp1_ctr++;
+      std::cout << "  *** Calling non-single-block solve *** " << std::endl;
+      std::cout << "      team_size = " << team_size << std::endl;
+      std::cout << "      lvl_nodes = " << lvl_nodes << std::endl;
+      timer_full_solve.reset();
+  #endif
+
+#if defined(KOKKOS_ENABLE_CUDA) && defined(KOKKOSPSTRSV_SOLVE_IMPL_PROFILE)
+cudaProfilerStart();
+#endif
+        if (is_lower) {
+          // TODO Time changes between merged functor and individuals
+          //LowerTriLvlSchedTP1SolverFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, node_count);
+          TriLvlSchedTP1SolverFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, true, node_count);
+          if ( team_size == -1 )
+            Kokkos::parallel_for("parfor_l_team_chain1auto", policy_type( lvl_nodes , Kokkos::AUTO ), tstf);
+          else
+            Kokkos::parallel_for("parfor_l_team_chain1", policy_type( lvl_nodes , team_size ), tstf);
+        }
+        else {
+          //UpperTriLvlSchedTP1SolverFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, node_count);
+          TriLvlSchedTP1SolverFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, false, node_count);
+          if ( team_size == -1 )
+            Kokkos::parallel_for("parfor_u_team_chain1auto", policy_type( lvl_nodes , Kokkos::AUTO ), tstf);
+          else
+            Kokkos::parallel_for("parfor_u_team_chain1", policy_type( lvl_nodes , team_size ), tstf);
+        }
+#if defined(KOKKOS_ENABLE_CUDA) && defined(KOKKOSPSTRSV_SOLVE_IMPL_PROFILE)
+cudaProfilerStop();
+#endif
+
+        // echain is offset into level... ??
+        node_count += lvl_nodes;
+        //std::cout << "  schain: " << schain << "  lvl_nodes: " << lvl_nodes << "  updated node_count: " << node_count << std::endl;
+
+      // TODO Test this inside if-else vs here
+      Kokkos::fence();
+  #ifdef TRISOLVE_TIMERS
+      // full-solve time
+      time_iter = timer_full_solve.seconds();
+      time_full_solves += time_iter;
+      std::cout << "  tp1 iter: " << tp1_ctr << "  time_iter = " << time_iter << std::endl;
+      //time_full_solves += timer_full_solve.seconds();
+  #endif
+    }
+    else {
+      //std::cout << "Call multi-link single-block TP - chainlink: " << chainlink << std::endl;
+      // run single_block algm, pass echain and schain as args
+        size_type lvl_nodes = 0;
+
+        typedef Kokkos::TeamPolicy<execution_space> policy_type;
+        typedef Kokkos::TeamPolicy<LargerCutoffTag, execution_space> large_cutoff_policy_type;
+        auto cutoff = thandle.get_chain_threshold();
+        const int team_size = cutoff;
+  #ifdef TRISOLVE_TIMERS
+     // full-solve time
+      chain_ctr++;
+      std::cout << "  *** Calling single-block solve *** " << std::endl;
+      std::cout << "      team_size = " << team_size << "  cutoff = " << cutoff << std::endl;
+      std::cout << "      lvl_nodes = " << lvl_nodes << std::endl;
+      timer_chain_solve.reset();
+  #endif
+//        const int team_size = std::is_same<typename Kokkos::DefaultExecutionSpace::memory_space, Kokkos::HostSpace>::value ? 1 : 256; // TODO chainlink cutoff hard-coded to 256: make this a "threshold" parameter in the handle
+
+#if defined(KOKKOS_ENABLE_CUDA) && defined(KOKKOSPSTRSV_SOLVE_IMPL_PROFILE)
+cudaProfilerStart();
+#endif
+        if (is_lower) {
+          if (cutoff <= team_size) {
+            TriLvlSchedTP1SingleBlockFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, nodes_per_level, node_count, schain, echain, true);
+//          LowerTriLvlSchedTP1SingleBlockFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, nodes_per_level, node_count, schain, echain);
+            Kokkos::parallel_for("parfor_l_team_chainmulti", policy_type( 1, team_size ), tstf);
+          }
+          else {
+            // team_size < cutoff => kernel must allow for a block-stride internally
+            TriLvlSchedTP1SingleBlockFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, nodes_per_level, node_count, schain, echain, true, cutoff);
+//          LowerTriLvlSchedTP1SingleBlockFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, nodes_per_level, node_count, schain, echain);
+            Kokkos::parallel_for("parfor_l_team_chainmulti_cutoff", large_cutoff_policy_type( 1, team_size ), tstf);
+          }
+        }
+        else {
+          if (cutoff <= team_size) {
+            TriLvlSchedTP1SingleBlockFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, nodes_per_level, node_count, schain, echain, false);
+//          UpperTriLvlSchedTP1SingleBlockFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, nodes_per_level, node_count, schain, echain);
+            Kokkos::parallel_for("parfor_u_team_chainmulti", policy_type( 1, team_size ), tstf);
+          }
+          else {
+            // team_size < cutoff => kernel must allow for a block-stride internally
+            TriLvlSchedTP1SingleBlockFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, nodes_per_level, node_count, schain, echain, false, cutoff);
+//          UpperTriLvlSchedTP1SingleBlockFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, nodes_per_level, node_count, schain, echain);
+            Kokkos::parallel_for("parfor_u_team_chainmulti_cutoff", large_cutoff_policy_type( 1, team_size ), tstf);
+          }
+        }
+
+#if defined(KOKKOS_ENABLE_CUDA) && defined(KOKKOSPSTRSV_SOLVE_IMPL_PROFILE)
+cudaProfilerStop();
+#endif
+        for (size_type i = schain; i < echain; ++i) {
+          lvl_nodes += hnodes_per_level(i);
+        }
+        node_count += lvl_nodes;
+        //std::cout << "  echain: " << echain << "  lvl_nodes: " << lvl_nodes << "  updated node_count: " << node_count << std::endl;
+
+      // TODO Test this inside if-else vs here
+      Kokkos::fence();
+  #ifdef TRISOLVE_TIMERS
+     // full-solve time
+      time_iter = timer_chain_solve.seconds();
+      time_chain_solves += time_iter;
+      std::cout << "  chain iter: " << chain_ctr << "  time_iter = " << time_iter << std::endl;
+      //time_chain_solves += timer_chain_solve.seconds();
+  #endif
+    } // end else
+
+    // TODO Test this inside if-else vs here
+    //Kokkos::fence();
+  #ifdef TRISOLVE_TIMERS
+     // fenced solve time
+     time_wrapped_ifelse += timer_wrap_ifelse.seconds();
+  #endif
+  } // end for chainlink
+#ifdef TRISOLVE_TIMERS
+  // Total chain time
+  time_outer = timer_outer.seconds(); 
+
+  std::cout << "********************************" << std::endl; 
+  std::cout << "  tri_solve_chain: setup = " << time_setup << std::endl;
+  std::cout << "  tri_solve_chain: total loop = " << time_outer << std::endl;
+  std::cout << "  tri_solve_chain: full lvl solves = " << time_full_solves << std::endl;
+  std::cout << "      solve count = " << tp1_ctr << std::endl;
+  std::cout << "  tri_solve_chain: chain solves = " << time_chain_solves << std::endl;
+  std::cout << "      single-block solve count = " << chain_ctr << std::endl;
+  std::cout << "  tri_solve_chain: total if-else solve times = " << time_wrapped_ifelse << std::endl;
+  std::cout << "********************************" << std::endl; 
+#endif
+
+
+  auto dense_mtx = thandle.get_dense_mtx_partition();
+  auto dense_tri = thandle.get_dense_tri_partition();
+// Part 2. gemv, set xp <- bp - Mp*xknown
+//                 lhsp <- rhsp - Mp*lhs  lhs the subview from part 1.
+// Process:
+//           1. lhsp = Kokkos::subview(flhs, pair(cutoff,nrows); rhsp = Kokkos::subview(frhs, pair(cutoff,nrows); deep_copy(lhsp, rhsp);
+//           2. gemv("N", -1.0, dense_mtx, lhs, 1.0, lhsp); (where rhsp i.e. b was copied into lhsp, and lhs is the solution from part 1)
+//           3. Kokkos::fence(); ?
+
+  auto lhsp = Kokkos::subview(flhs, Kokkos::pair<size_type, size_type>(dense_start_row, flhs.extent(0))); 
+  auto rhsp = Kokkos::subview(frhs, Kokkos::pair<size_type, size_type>(dense_start_row, frhs.extent(0))); 
+  Kokkos::deep_copy(lhsp, rhsp);
+
+// Part 3. dense trisolve for remaining dense portion of x - use x as rhs and lhs in this step
+//           * Treat lhsp as partially updated rhsp, overwrite for final result
+
+// cublass API to dense trsv
+//cublasStatus_t cublasDtrsv(cublasHandle_t handle, cublasFillMode_t uplo,
+//                           cublasOperation_t trans, cublasDiagType_t diag, int n, const double *A, int lda, double *x, int incx)
+
+  // beginnings of the call...
+  // Need guards for Cuda being enabled AND active, etc
+#if defined(KOKKOS_ENABLED_CUDA)
+
+  cublasStatus_t stat;
+  cublasHandle_t cublashandle ;
+
+  stat = cublasCreate(&cublashandle);
+    if (stat != CUBLAS_STATUS_SUCCESS) {
+        printf ("CUBLAS handle created failed\n");
+        return EXIT_FAILURE;
+    }
+  cublasFillMode_t uplo = is_lower ? CUBLAS_FILL_MODE_LOWER : CUBLAS_FILL_MODE_UPPER;
+  cublasOperation_t trans = CUBLAS_OP_N;
+  cublasDiagType_t diag = CUBLAS_DIAG_NON_UNIT;
+  //cublasDiagType_t diag = CUBLAS_DIAG_UNIT;
+  bool tri_is_lr = std::is_same<Kokkos::LayoutRight, typename TriSolveHandle::mtx_scalar_view_t::array_layout >::value;
+  const int AST = tri_is_lr?dense_tri.stride(0):dense_tri.stride(1);
+  LDA = AST == 0 ? 1 : AST;
+
+  stat = cublasDtrsv(cublashandle, uplo, trans, diag, dense_tri.extent(0), dense_tri.data(), LDA, lhsp.data(), 1);
+    if (stat != CUBLAS_STATUS_SUCCESS) {
+        printf ("CUBLAS Dtrsv created failed\n");
+        return EXIT_FAILURE;
+    }
+
+  stat = cublasDestroy(cublashandle);
+    if (stat != CUBLAS_STATUS_SUCCESS) {
+        printf ("CUBLAS handle destroy failed\n");
+        return EXIT_FAILURE;
+    }
+#endif
+
+
+} // end tri_solve_partition_dense
+#endif
+
 
 
 } // namespace Experimental

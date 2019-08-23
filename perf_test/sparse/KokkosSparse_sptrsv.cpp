@@ -72,7 +72,7 @@ using namespace KokkosKernels::Experimental;
 
 //#define PRINT_HLEVEL_FREQ_PLOT
 
-enum {DEFAULT, CUSPARSE, LVLSCHED_RP, LVLSCHED_TP1, LVLSCHED_TP2, LVLSCHED_TP1CHAIN};
+enum {DEFAULT, CUSPARSE, LVLSCHED_RP, LVLSCHED_TP1, LVLSCHED_TP2, LVLSCHED_TP1CHAIN, LVLSCHED_DENSEP_TP1};
 
 
 template<typename Scalar>
@@ -207,6 +207,12 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
         kh.create_sptrsv_handle(SPTRSVAlgorithm::SEQLVLSCHED_TP2, nrows, is_lower_tri);
         if (team_size != -1) kh.get_sptrsv_handle()->set_team_size(team_size);
         if (vector_length != -1) kh.get_sptrsv_handle()->set_vector_size(vector_length);
+        kh.get_sptrsv_handle()->print_algorithm();
+        break;
+      case LVLSCHED_DENSEP_TP1:
+        kh.create_sptrsv_handle(SPTRSVAlgorithm::SEQLVLSCHD_DENSEP_TP1, nrows, is_lower_tri);
+        kh.get_sptrsv_handle()->reset_chain_threshold(chain_threshold);
+        if (team_size != -1) kh.get_sptrsv_handle()->set_team_size(team_size);
         kh.get_sptrsv_handle()->print_algorithm();
         break;
       case CUSPARSE:
@@ -463,6 +469,12 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
         if (vector_length != -1) kh.get_sptrsv_handle()->set_vector_size(vector_length);
         kh.get_sptrsv_handle()->print_algorithm();
         break;
+      case LVLSCHED_DENSEP_TP1:
+        kh.create_sptrsv_handle(SPTRSVAlgorithm::SEQLVLSCHD_DENSEP_TP1, nrows, is_lower_tri);
+        kh.get_sptrsv_handle()->reset_chain_threshold(chain_threshold);
+        if (team_size != -1) kh.get_sptrsv_handle()->set_team_size(team_size);
+        kh.get_sptrsv_handle()->print_algorithm();
+        break;
       case CUSPARSE:
 #ifdef KOKKOSKERNELS_ENABLE_TPL_CUSPARSE
         std::cout << "CUSPARSE: No kk interface added yet" << std::endl;
@@ -669,6 +681,9 @@ int main(int argc, char **argv)
     }
     if((strcmp(argv[i],"lvltp2")==0)) {
       tests.push_back( LVLSCHED_TP2 );
+    }
+    if((strcmp(argv[i],"lvldensetp1")==0)) {
+      tests.push_back( LVLSCHED_DENSEP_TP1 );
     }
     if((strcmp(argv[i],"cusparse")==0)) {
       tests.push_back( CUSPARSE );

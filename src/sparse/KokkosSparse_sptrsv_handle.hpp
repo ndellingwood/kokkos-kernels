@@ -49,12 +49,13 @@
 #ifndef KOKKOSSPARSE_SPTRSVHANDLE_HPP
 #define KOKKOSSPARSE_SPTRSVHANDLE_HPP
 
+#define DENSEPARTITION
+
 namespace KokkosSparse {
 namespace Experimental {
 
 // TODO TP2 algorithm had issues with some offset-ordinal combo to be addressed when compiled in Trilinos...
-enum class SPTRSVAlgorithm { SEQLVLSCHD_RP, SEQLVLSCHD_TP1, SEQLVLSCHED_TP2, SEQLVLSCHD_TP1CHAIN };
-// TODO Just added enum labels for "chain" implementations - may need to completely replace the existing algms with these once complete
+enum class SPTRSVAlgorithm { SEQLVLSCHD_RP, SEQLVLSCHD_TP1, SEQLVLSCHED_TP2, SEQLVLSCHD_TP1CHAIN , SEQLVLSCHD_DENSEP_TP1 };
 
 template <class size_type_, class lno_t_, class scalar_t_,
           class ExecutionSpace,
@@ -83,10 +84,12 @@ public:
 
   typedef typename Kokkos::View<size_type *, HandleTempMemorySpace> nnz_row_view_temp_t;
   typedef typename Kokkos::View<size_type *, HandlePersistentMemorySpace> nnz_row_view_t;
+  typedef typename nnz_row_view_t::HostMirror host_nnz_row_view_t;
  // typedef typename row_lno_persistent_work_view_t::HostMirror row_lno_persistent_work_host_view_t; //Host view type
 
   typedef typename Kokkos::View<nnz_scalar_t *, HandleTempMemorySpace> nnz_scalar_view_temp_t;
   typedef typename Kokkos::View<nnz_scalar_t *, HandlePersistentMemorySpace> nnz_scalar_view_t;
+  typedef typename nnz_scalar_view_t::HostMirror host_nnz_scalar_view_t;
 
 
   typedef typename Kokkos::View<nnz_lno_t *, HandleTempMemorySpace> nnz_lno_view_temp_t;
@@ -127,20 +130,7 @@ private:
   size_type num_chain_entries;
   signed_integral_t chain_threshold;
 
-  // Symbolic and Numeric: Dense-block data structures
-  /*
-  // TODO Should the dense-block stuff be stored in its own data structure?
-  // KokkosBlas::gemv expects rank2 view for the matrix
-  typedef typename Kokkos::View<nnz_scalar_t **, HandlePersistentMemorySpace> mtx_scalar_view_t;
-  size_type row_threshold_cutoff;
-  mtx_scalar_view_t dense_matrix_block;
-  mtx_scalar_view_t dense_triangular_block; // 2D storage is inefficient for this matrix, but fits cuBLAS pattern...
-  nnz_scalar_view_t dense_vector_block; // Make this a copy of subview of the original view
 
-  bool require_symbolic_denseblock_phase;
-  bool symbolic_denseblock_correction_complete;
-  bool numeric_complete;
-  */
 
   bool symbolic_complete;
   bool require_symbolic_lvlsched_phase;
@@ -154,6 +144,9 @@ private:
         || algm == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_TP1
         || algm == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHED_TP2
         || algm == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_TP1CHAIN
+#ifdef DENSEPARTITION
+        || algm == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_DENSEP_TP1
+#endif
        ) 
     {
       require_symbolic_lvlsched_phase = true;
@@ -164,13 +157,54 @@ private:
   }
 
   void set_if_algm_require_symb_chain () {
-    if (algm == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_TP1CHAIN) {
+    if (algm == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_TP1CHAIN
+#ifdef DENSEPARTITION
+        || algm == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_DENSEP_TP1
+#endif
+       ) 
+    {
       require_symbolic_chain_phase = true;
     }
     else {
       require_symbolic_chain_phase = false;
     }
   }
+
+
+
+  // Symbolic and Numeric: Dense-block data structures
+#ifdef DENSEPARTITION
+  // KokkosBlas::gemv expects rank2 view for the matrix
+  typedef typename Kokkos::View<nnz_scalar_t **, HandlePersistentMemorySpace> mtx_scalar_view_t;
+  size_type dense_start_row;
+  size_type num_sparse_part_nnz;
+
+  mtx_scalar_view_t dense_matrix_partition;
+  mtx_scalar_view_t dense_tri_partition; // 2D storage is inefficient for this matrix, but fits cuBLAS pattern...
+  //mtx_scalar_view_t dense_tri_inv_partition; // 2D storage is inefficient for this matrix, but fits cuBLAS pattern...
+  //nnz_scalar_view_t dense_bvector_partition; // Make this a copy of subview of the original view - TODO Unneccessary to add here, just create subview before fcn call?
+
+  //nnz_row_view_t    sparse_rowmap_partition; // Make this a subview of the original view - TODO Unneccessary to add here, just create subview before fcn call?
+  //nnz_lno_view_t    sparse_entries_partition; // Make this a subview of the original view - TODO Unneccessary to add here, just create subview before fcn call?
+  //nnz_scalar_view_t sparse_vals_partition; // Make this a subview of the original view - TODO Unneccessary to add here, just create subview before fcn call?
+  //nnz_scalar_view_t sparse_bvector_partition; // Make this a subview of the original view - TODO Unneccessary to add here, just create subview before fcn call?
+
+  bool require_symbolic_numeric_dense_phase;
+  bool numeric_complete;
+
+  void set_if_algm_require_dense_partition() {
+    if (algm == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_DENSEP_TP1) {
+      require_symbolic_numeric_dense_phase = true;
+    }
+    else {
+      require_symbolic_numeric_dense_phase = false;
+    }
+  }
+
+  KOKKOS_INLINE_FUNCTION
+  size_type get_sparse_num_rows() { return require_symbolic_numeric_dense_phase ? dense_start_row : nrows; }
+#endif
+
 
 public:
 
@@ -193,9 +227,20 @@ public:
     symbolic_complete(symbolic_complete_),
     require_symbolic_lvlsched_phase(false),
     require_symbolic_chain_phase(false)
+#ifdef DENSEPARTITION
+    ,dense_start_row(0),
+    num_sparse_part_nnz(0),
+    dense_matrix_partition(),
+    dense_tri_partition(),
+    require_symbolic_numeric_dense_phase(false),
+    numeric_complete(false)
+#endif
   {
     this->set_if_algm_require_symb_lvlsched();
     this->set_if_algm_require_symb_chain();
+#ifdef DENSEPARTITION
+    this->set_if_algm_require_dense_partition();
+#endif
   }
 
 #if 0
@@ -215,10 +260,10 @@ public:
 
 /*
   template <class rhslno_row_view_t_,
-          class rhslno_nnz_view_t_,
-          class rhsscalar_nnz_view_t_,
-          class rhsExecutionSpace,
-          class rhsMemorySpace>
+            class rhslno_nnz_view_t_,
+            class rhsscalar_nnz_view_t_,
+            class rhsExecutionSpace,
+            class rhsMemorySpace>
   SPTRSVHandle ( SPTRSVHandle< rhslno_row_view_t_, rhslno_nnz_view_t_, rhsscalar_nnz_view_t_, rhsExecutionSpace, rhsMemorySpace > & rhs ) {
 
     this->level_list = rhs.level_list;
@@ -232,10 +277,10 @@ public:
   }
 
   template <class rhslno_row_view_t_,
-          class rhslno_nnz_view_t_,
-          class rhsscalar_nnz_view_t_,
-          class rhsExecutionSpace,
-          class rhsMemorySpace>
+            class rhslno_nnz_view_t_,
+            class rhsscalar_nnz_view_t_,
+            class rhsExecutionSpace,
+            class rhsMemorySpace>
   SPTRSVHandle & operator= ( SPTRSVHandle< rhslno_row_view_t_, rhslno_nnz_view_t_, rhsscalar_nnz_view_t_, rhsExecutionSpace, rhsMemorySpace > & rhs ) {
 
     this->level_list = rhs.level_list;
@@ -255,7 +300,28 @@ public:
   void init_handle(const size_type nrows_) {
     set_nrows(nrows_);
     // Assumed that level scheduling occurs during symbolic phase for all algorithms, for now
-    if ( this->require_symbolic_lvlsched_phase == true ) {
+
+#ifdef DENSEPARTITION
+    // FIXME This algorithm still uses lvl scheduling, but nrows refers to the full matrix, and we now need the lvl scheduling to use num rows of the sparse partition
+    if ( this->require_symbolic_numeric_dense_phase == true ) {
+      dense_start_row = 0.75*nrows; // TODO Set this differently, just simple default for now
+      auto num_dense_rows = nrows - dense_start_row;
+       // [0, dense_start_row) sparse;  [dense_start_row, nrows) dense, but map to [0,nrows-dense_start_row)
+
+      dense_matrix_partition = mtx_scalar_view_t("dense_mtx",  num_dense_rows, dense_start_row);
+      dense_tri_partition = mtx_scalar_view_t("dense_tri_mtx", num_dense_rows, num_dense_rows);
+      //dense_tri_inv_partition = mtx_scalar_view_t ; // 2D storage is inefficient for this matrix, but fits cuBLAS pattern...
+
+      numeric_complete = false;
+    }
+#endif
+
+#ifdef DENSEPARTITION
+    if ( this->require_symbolic_lvlsched_phase == true && this->require_symbolic_numeric_dense_phase == false )
+#else
+    if ( this->require_symbolic_lvlsched_phase == true )
+#endif
+    {
       set_num_levels(0);
       level_list = signed_nnz_lno_view_t(Kokkos::ViewAllocateWithoutInitializing("level_list"), nrows_);
       Kokkos::deep_copy( level_list, signed_integral_t(-1) );
@@ -264,11 +330,30 @@ public:
       nodes_grouped_by_level = nnz_lno_view_t("nodes_grouped_by_level", nrows_);
       hnodes_grouped_by_level = Kokkos::create_mirror_view(nodes_grouped_by_level);
     }
+#ifdef DENSEPARTITION
+    else if ( this->require_symbolic_lvlsched_phase == true && this->require_symbolic_numeric_dense_phase == true)
+    {
+      // FIXME Do not use nrows (full matrix) in this case
+      // Fixed - created a function to return correct value, this else-if routine can take over
+      set_num_levels(0);
+      level_list = signed_nnz_lno_view_t(Kokkos::ViewAllocateWithoutInitializing("level_list"), get_sparse_num_rows() );
+      Kokkos::deep_copy( level_list, signed_integral_t(-1) );
+      nodes_per_level =  nnz_lno_view_t("nodes_per_level", get_sparse_num_rows() );
+      hnodes_per_level = Kokkos::create_mirror_view(nodes_per_level);
+      nodes_grouped_by_level = nnz_lno_view_t("nodes_grouped_by_level", get_sparse_num_rows() );
+      hnodes_grouped_by_level = Kokkos::create_mirror_view(nodes_grouped_by_level);
+    }
+#endif
 
     // TODO Incorporate usage of this data into the algorithms
     diagonal_offsets = nnz_lno_view_t(Kokkos::ViewAllocateWithoutInitializing("diagonal_offsets"), nrows_);
 
-    if (this->require_symbolic_chain_phase == true) {
+#ifdef DENSEPARTITION
+    if (this->require_symbolic_chain_phase == true && this->require_symbolic_numeric_dense_phase == false )
+#else
+    if (this->require_symbolic_chain_phase == true)
+#endif
+    {
       if (this->chain_threshold == -1) {
         // Need default if chain_threshold not set
         // 0: Every level, regardless of number of nodes, is launched within a kernel
@@ -302,6 +387,44 @@ public:
         }
       }
     }
+#ifdef DENSEPARTITION
+    else if (this->require_symbolic_chain_phase == true && this->require_symbolic_numeric_dense_phase == true )
+    {
+      // Fixed - created a function to return correct value, this else-if routine can take over
+      if (this->chain_threshold == -1) {
+        // Need default if chain_threshold not set
+        // 0: Every level, regardless of number of nodes, is launched within a kernel
+        if (team_size == -1) {
+          this->chain_threshold = 0; 
+          h_chain_ptr = host_signed_nnz_lno_view_t("h_chain_ptr", get_sparse_num_rows() );
+        }
+        else {
+          std::cout << "  Warning: chain_threshold was not set - will default to team_size = " << this->team_size << "  chain_threshold = " << this->chain_threshold << std::endl;
+          this->chain_threshold = this->team_size; 
+          h_chain_ptr = host_signed_nnz_lno_view_t("h_chain_ptr", get_sparse_num_rows() );
+        }
+      }
+      else {
+        // FIXME Compare threshold with team_size limit - either error or automatically adjust if incompatible
+        if (this->team_size >= this->chain_threshold) {
+          h_chain_ptr = host_signed_nnz_lno_view_t("h_chain_ptr", get_sparse_num_rows() );
+        }
+        else if (this->team_size == -1) {
+          std::cout << "  Warning: team_size was not set  team_size = " << this->team_size << "  chain_threshold = " << this->chain_threshold << std::endl;
+          std::cout << "  Automatically setting team_size to chain_threshold - if this exceeds the hardware limitation a runtime error will occur during kernel launch - reduce chain_threshold in that case" << std::endl;
+          this->team_size = this->chain_threshold;
+          h_chain_ptr = host_signed_nnz_lno_view_t("h_chain_ptr", get_sparse_num_rows() );
+        }
+        else {
+          // TODO Must set team_size when using chain - or should it be automatically set to chain_threshold?
+          std::cout << "  EXPERIMENTAL: team_size < chain_size: team_size = " << this->team_size << "  chain_threshold = " << this->chain_threshold << std::endl;
+          h_chain_ptr = host_signed_nnz_lno_view_t("h_chain_ptr", get_sparse_num_rows() );
+          //std::cout << "  Error: team_size = " << this->team_size << "  chain_threshold = " << this->chain_threshold << std::endl;
+          //throw std::runtime_error ("  sptrsv_handle.init_handle error: chain_threshold > team_size - this is an invalid pair of values for this algorithm");
+        }
+      }
+    }
+#endif
     else {
       h_chain_ptr = host_signed_nnz_lno_view_t();
       this->chain_threshold = -1;
@@ -309,6 +432,7 @@ public:
     set_num_chain_entries(0);
     set_symbolic_incomplete();
   }
+
 
   virtual ~SPTRSVHandle() {};
 
@@ -368,6 +492,31 @@ public:
   size_type get_nrows() const { return nrows; }
   void set_nrows(const size_type nrows_) { this->nrows = nrows_; }
 
+#ifdef DENSEPARTITION
+  KOKKOS_INLINE_FUNCTION
+  size_type get_dense_start_row() const { return dense_start_row; }
+/*
+  // Below - these were intended for the dense matrix, but naming is unclear; this revealed that I should just use the View extents to get these values
+  // Leaving for now as reminder
+  KOKKOS_INLINE_FUNCTION
+  size_type get_num_dense_rows() const { return (nrows - dense_start_row); }
+
+  KOKKOS_INLINE_FUNCTION
+  size_type get_num_dense_cols() const { return (dense_start_row); }
+*/
+
+  KOKKOS_INLINE_FUNCTION
+  size_type get_num_sparse_part_nnz() const { return num_sparse_part_nnz; }
+
+  inline
+  void set_num_sparse_part_nnz(const size_type snnz) { num_sparse_part_nnz = snnz; }
+
+  KOKKOS_INLINE_FUNCTION
+  mtx_scalar_view_t get_dense_mtx_partition() const { return dense_matrix_partition; }
+
+  KOKKOS_INLINE_FUNCTION
+  mtx_scalar_view_t get_dense_tri_partition() const { return dense_tri_partition; }
+#endif
 
   // FIXME This is only interface for setting the chain_threshold for now, but results in unnecessary realloc of h_chain_ptr
   void reset_chain_threshold(const signed_integral_t threshold) { 
@@ -411,6 +560,13 @@ public:
   void set_symbolic_complete() { this->symbolic_complete = true; }
   void set_symbolic_incomplete() { this->symbolic_complete = false; }
 
+#ifdef DENSEPARTITION
+  bool is_numeric_complete() const { return numeric_complete; }
+
+  void set_numeric_complete() { this->numeric_complete = true; }
+  void set_numeric_incomplete() { this->numeric_complete = false; }
+#endif
+
   KOKKOS_INLINE_FUNCTION
   int get_team_size() const {return this->team_size;}
   void set_team_size(const int ts) {this->team_size = ts;}
@@ -438,6 +594,10 @@ public:
     if ( algm == SPTRSVAlgorithm::SEQLVLSCHD_TP1CHAIN )
       std::cout << "SEQLVLSCHD_TP1CHAIN" << std::endl;;
 
+#ifdef DENSEPARTITION
+    if ( algm == SPTRSVAlgorithm::SEQLVLSCHD_DENSEP_TP1 )
+      std::cout << "SEQLVLSCHD_DENSEP_TP1" << std::endl;;
+#endif
   }
 
 
@@ -450,12 +610,16 @@ public:
     if ( algm == SPTRSVAlgorithm::SEQLVLSCHD_TP1 )
       ret_string = "SEQLVLSCHD_TP1";
 
-    if ( algm == SPTRSVAlgorithm::SEQLVLSCHED_TP2 ) {
+    if ( algm == SPTRSVAlgorithm::SEQLVLSCHED_TP2 )
       ret_string = "SEQLVLSCHED_TP2";
-    }
 
     if ( algm == SPTRSVAlgorithm::SEQLVLSCHD_TP1CHAIN )
       ret_string = "SEQLVLSCHD_TP1CHAIN";
+
+#ifdef DENSEPARTITION
+    if ( algm == SPTRSVAlgorithm::SEQLVLSCHD_DENSEP_TP1 )
+      ret_string = "SEQLVLSCHD_DENSEP_TP1";
+#endif
 
     return ret_string;
   }
@@ -467,6 +631,9 @@ public:
     else if(name=="SPTRSV_TEAMPOLICY1")       return SPTRSVAlgorithm::SEQLVLSCHD_TP1;
     else if(name=="SPTRSV_TEAMPOLICY2")       return SPTRSVAlgorithm::SEQLVLSCHED_TP2;
     else if(name=="SPTRSV_TEAMPOLICY1CHAIN")  return SPTRSVAlgorithm::SEQLVLSCHD_TP1CHAIN;
+#ifdef DENSEPARTITION
+    else if(name=="SPTRSV_DENSEPARTITION_TEAMPOLICY1") return  SPTRSVAlgorithm::SEQLVLSCHD_DENSEP_TP1;
+#endif
     else
       throw std::runtime_error("Invalid SPTRSVAlgorithm name");
   }

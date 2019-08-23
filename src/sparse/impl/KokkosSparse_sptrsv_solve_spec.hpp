@@ -159,6 +159,7 @@ struct SPTRSV_SOLVE<KernelHandle, RowMapType, EntriesType, ValuesType, BType, XT
 
     if ( sptrsv_handle->is_lower_tri() ) {
       if ( sptrsv_handle->is_symbolic_complete() == false ) {
+        // FIXME - will need enhancement to handle various symbolic routines, should place them in "control" symbolic function?
         Experimental::lower_tri_symbolic(*sptrsv_handle, row_map, entries);
       }
       if ( sptrsv_handle->get_algorithm() == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_TP1CHAIN ) {
@@ -167,6 +168,13 @@ struct SPTRSV_SOLVE<KernelHandle, RowMapType, EntriesType, ValuesType, BType, XT
         std::cout << "  lower_tri_solve cutoff: " << cutoff_threshold << std::endl;
         Experimental::tri_solve_chain( *sptrsv_handle, row_map, entries, values, b, x, true);
       }
+#ifdef DENSEPARTITION
+      else if ( sptrsv_handle->get_algorithm() == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_DENSEP_TP1 ) {
+        Experimental::numeric_dense_partition_algm(*sptrsv_handle, row_map, entries, values); // vals not an argument, this needs its own file, or move to solve...
+        sptrsv_handle->set_numeric_complete();
+        Experimental::tri_solve_partition_dense(*sptrsv_handle, row_map, entries, values, b, x, true);
+      }
+#endif
       else {
         Experimental::lower_tri_solve( *sptrsv_handle, row_map, entries, values, b, x);
       }
@@ -181,6 +189,13 @@ struct SPTRSV_SOLVE<KernelHandle, RowMapType, EntriesType, ValuesType, BType, XT
         std::cout << "  upper_tri_solve cutoff: " << cutoff_threshold << std::endl;
         Experimental::tri_solve_chain( *sptrsv_handle, row_map, entries, values, b, x, false);
       }
+#ifdef DENSEPARTITION
+      else if ( sptrsv_handle->get_algorithm() == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_DENSEP_TP1 ) {
+        Experimental::numeric_dense_partition_algm(*sptrsv_handle, row_map, entries, values); // vals not an argument, this needs its own file, or move to solve...
+        sptrsv_handle->set_numeric_complete();
+        Experimental::tri_solve_partition_dense(*sptrsv_handle, row_map, entries, values, b, x, false);
+      }
+#endif
       else {
         Experimental::upper_tri_solve( *sptrsv_handle, row_map, entries, values, b, x);
       }
