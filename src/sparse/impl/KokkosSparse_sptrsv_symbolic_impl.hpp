@@ -168,6 +168,7 @@ void lower_tri_symbolic (TriSolveHandle &thandle, const RowMapType drow_map, con
   typedef typename TriSolveHandle::signed_integral_t signed_integral_t;
 
 //  size_type nrows = thandle.get_nrows();
+  // Necessary for partitioned persisting sparse matrix
   size_type nrows = drow_map.extent(0)-1;
 
   auto row_map = Kokkos::create_mirror_view(drow_map);
@@ -203,8 +204,16 @@ void lower_tri_symbolic (TriSolveHandle &thandle, const RowMapType drow_map, con
 
   // node 0 is trivially independent in lower tri solve, start with it in level 0
   size_type level = 0;
+  // FIXME Change this to allow for partitioned sparse mtx
+#ifdef DENSEPARTITION
+  auto starting_node = thandle.get_lvlsched_node_start();
+  auto ending_node = thandle.get_lvlsched_node_end();
+#else
   auto starting_node = 0;
-  level_list(starting_node) = 0;
+  auto ending_node = nrows
+#endif
+
+  level_list(starting_node) = level;
   size_type node_count = 1; //lower tri: starting with node 0 already in level 0
 
   nodes_per_level(0) = 1;
@@ -212,7 +221,7 @@ void lower_tri_symbolic (TriSolveHandle &thandle, const RowMapType drow_map, con
 
   while (node_count < nrows) {
 
-    for ( size_type row = 1; row < nrows; ++row ) { // row 0 already included
+    for ( size_type row = starting_node+1; row < ending_node; ++row ) { // row 0 already included
       if ( level_list(row) == -1 ) { // unmarked
         bool is_root = true;
         signed_integral_t ptrstart = row_map(row);
@@ -304,6 +313,7 @@ void upper_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, co
   typedef typename TriSolveHandle::signed_integral_t signed_integral_t;
 
 //  size_type nrows = thandle.get_nrows();
+  // Necessary for partitioned persisting sparse matrix
   size_type nrows = drow_map.extent(0)-1;
 
   auto row_map = Kokkos::create_mirror_view(drow_map);
@@ -339,8 +349,18 @@ void upper_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, co
 
   // final row is trivially independent in upper tri solve, start with it in level 0
   size_type level = 0;
+  // FIXME: starting_node only holds for FULL matrix, not the sparse partition in different algorithm
+  // Depending on algorithm, can be nrows - 1 vs dense_start_row - 1
+  // FIXME Change this to allow for partitioned sparse mtx
+#ifdef DENSEPARTITION
+  auto starting_node = thandle.get_lvlsched_node_start();
+  auto ending_node = thandle.get_lvlsched_node_end();
+#else
   auto starting_node = nrows - 1;
-  level_list(starting_node) = 0;
+  auto ending_node = 0;
+#endif
+
+  level_list(starting_node) = level;
   size_type node_count = 1; //upper tri: starting with node n already in level 0
 
   nodes_per_level(0) = 1;
@@ -348,7 +368,7 @@ void upper_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, co
 
   while (node_count < nrows) {
 
-    for ( signed_integral_t row = nrows-2; row >= 0; --row ) { // row 0 already included
+    for ( signed_integral_t row = starting_node-1; row >= ending_node; --row ) { // row 0 already included
       if ( level_list(row) == -1 ) { // unmarked
         bool is_root = true;
         signed_integral_t ptrstart = row_map(row);
@@ -421,17 +441,162 @@ void upper_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, co
  }
 } // end upper_tri_symbolic
 
+
+
+
 #ifdef DENSEPARTITION
 template < class TriSolveHandle, class RowMapType, class EntriesType >
 void symbolic_dense_partition_algm( TriSolveHandle &thandle, const RowMapType drow_map, const EntriesType dentries) {
 
+  typedef typename TriSolveHandle::size_type size_type;
+  typedef typename TriSolveHandle::scalar_t  scalar_t;
+
+  // FIXME - no longer need to run symbolic on shifted sparse graph, use the original where level scheduling know where to begin/end based on partitioning
+  // This routine will:
+  // *. Determine new offset into entries (and values), needed for partitioned rectspmtx block and dense trimtx
+  // *. Allocate dense trimtx, and shifted row_map for rectangular spmtx block (likely needed for spmv)
+  // *. Apply "shift" to rectspmtx row_map
+  // *. Allocate shifted rectspmtx entries and values arrays (otherwise numbering is off for the spmv)
+  // *. Call original symbolic routine
+  // *.(TMP) Call numeric phase - will copy data into dense trimtx and rectspmtx ds
+  // *.(TMP) To allocate rectspmtx ds, need the row_map allocated AND adjusted (i.e. dense trimtx colids removed) following some manipulation - make symbolic a "fused" symbolic+numeric, then use numeric to reload the data only (not realloc)
+
+
+  // shifted rectspmtx row_map allocation
+  auto row_map_rectspmtx = thandle.get_row_map_rectspmtx_partition();
+  auto dense_partition_nrows = thandle.get_dense_partition_nrows() ;
+
+  // TODO Will the reference count help this allocation to persist beyond this function call?
+  row_map_rectspmtx = typename TriSolveHandle::nnz_row_view_t("row_map_rectspmtx_partition", dense_partition_nrows+1);
+
+
+  typedef Kokkos::View<size_type, typename RowMapType::memory_space> ShiftedEntriesStart;
+
+  auto dense_row_start = thandle.get_dense_partition_row_start();
+
+  std::cout << "  Begin numeric" << std::endl;
+  std::cout << "  dense_row_start = " << dense_row_start << std::endl;
+
+  ShiftedEntriesStart shifted_entries_start(Kokkos::ViewAllocateWithoutInitializing("ses"));
+
+  auto cprow_map = Kokkos::subview( drow_map, Kokkos::pair<size_type,size_type>(dense_row_start, dense_row_start+dense_partition_nrows+1) );
+/*
+  Kokkos::parallel_for("shifted_dense_row_map_init", Kokkos::RangePolicy<Kokkos::DefaultExecutionSpace>(0, row_map_rectspmtx.extent(0)),
+    KOKKOS_LAMBDA (const size_type i) {
+      if ( i == 0 )
+        shifted_entries_start() = cprow_map(0);
+
+      row_map_rectspmtx(i) = cprow_map(i) - cprow_map(0);
+    });
+*/
+  auto h_shifted_entries_start_view = Kokkos::create_mirror_view(shifted_entries_start);
+  Kokkos::deep_copy(h_shifted_entries_start_view, shifted_entries_start);
+  // Use this to set offset into entries for copying to dense tri within numeric phase
+  // TODO Is this even necessary now??? Can alternatively use original rowmap(dense_row_start) to point to beginning of entries and values to copy to dense tri...
+
+
+  // reshape the rectspmtx row_map, allocate corresponding entries and vals
+  size_type rectsptmx_nnz = 0;
+  size_type rectspmtx_col_start;
+  size_type trimtx_col_start;
+
+  bool is_lower_tri = thandle.is_lower_tri();
+
+  if (is_lower_tri) {
+    rectspmtx_col_start = 0; // ends at trimtx_col_start
+    trimtx_col_start = dense_row_start; // ends at nrows
+  }
+  else {
+    rectspmtx_col_start = dense_partition_nrows; // ends at nrows
+    trimtx_col_start = 0; // ends at rectspmtx_col_start
+  }
+
+  // reshape CRS
+  // cprow_map has proper offsets into dentries and dvalues
+/*
+  Kokkos::parallel_for("shifted_dense_row_map_init", Kokkos::RangePolicy<Kokkos::DefaultExecutionSpace>(0, cprow_map.extent(0)),
+    KOKKOS_LAMBDA (const size_type i) {
+      size_type offset_start = cprow_map(i);
+      size_type offset_end   = cprow_map(i+1);
+      for (size_type offset = offset_start; offset < offset_end; ++offset) {
+        size_type colid = dentries(offset);
+        // Remove out-of-sparse-rect indices
+        if ( (is_lower_tri && colid >= trimtx_col_start) || (!is_lower_tri && colid < rectspmtx_col_start) ) {
+          // Decrement row_map_rectspmtx(i+1), but need to also decrement for every following index as well...
+        }
+      }
+    });
+*/
+  // Frequency count of indices in rectspmtx of partition
+  //Kokkos::parallel_for("row_map_rectspmtx freq count", Kokkos::RangePolicy<Kokkos::DefaultExecutionSpace>(0, cprow_map.extent(0)),
+  Kokkos::parallel_for("row_map_rectspmtx freq count", Kokkos::RangePolicy<Kokkos::DefaultExecutionSpace>(0, dense_partition_nrows),
+    KOKKOS_LAMBDA (const size_type i) {
+      size_type offset_start = cprow_map(i);
+      size_type offset_end   = cprow_map(i+1);
+      for (size_type offset = offset_start; offset < offset_end; ++offset) {
+        size_type colid = dentries(offset);
+        // Remove out-of-sparse-rect indices
+        // Count in-sparse-rect entries per row, store at row_map(rowid+1) in anticipation of followup scan
+        if ( (is_lower_tri && colid < trimtx_col_start) || (!is_lower_tri && colid >= rectspmtx_col_start) ) {
+          // increment row_map_rectspmtx(i+1)
+          ++row_map_rectspmtx(i+1);
+        }
+      }
+    });
+
+  // Convert count of indices in rectspmtx to a row_map
+  size_type rectspmtx_nnz = 0; // this is needed for allocating rectspmtx entries and values arrays
+  Kokkos::parallel_scan("row_map_rectspmtx scan", Kokkos::RangePolicy<Kokkos::DefaultExecutionSpace>(0, row_map_rectspmtx.extent(0)),
+    KOKKOS_LAMBDA (const size_type i, scalar_t& update, const bool& final) {
+      update += row_map_rectspmtx(i);
+      if (final) {
+        row_map_rectspmtx(i) = update;
+      }
+    }, rectspmtx_nnz);
+
+  auto entries_rectspmtx_partition = thandle.get_entries_rectspmtx_partition(); 
+  entries_rectspmtx_partition = typename TriSolveHandle::nnz_lno_view_t("entries_rectspmtx_partition", rectspmtx_nnz);
+
+  auto values_rectspmtx_partition = thandle.get_values_rectspmtx_partition();
+  values_rectspmtx_partition = typename TriSolveHandle::nnz_scalar_view_t("values_rectspmtx_partition", rectspmtx_nnz);
+
+  // create rectspmtx entries array
+  Kokkos::parallel_for("entries_rectspmtx init", Kokkos::RangePolicy<Kokkos::DefaultExecutionSpace>(0, dense_partition_nrows),
+    KOKKOS_LAMBDA (const size_type i) {
+      // Iterate over partition of original matrix to extract the indices in the rectangular sparse matrix partition
+      size_type offset_start = cprow_map(i);
+      size_type offset_end   = cprow_map(i+1);
+
+      //auto idx_count_this_row = row_map_rectspmtx(i+1) - row_map_rectspmtx(i);
+      auto new_idx_offset = row_map_rectspmtx(i);
+
+      for (size_type offset = offset_start; offset < offset_end; ++offset) {
+        size_type colid = dentries(offset);
+        // Remove out-of-sparse-rect indices
+        // Count in-sparse-rect entries per row, store at row_map(rowid+1) in anticipation of followup scan
+        if ( (is_lower_tri && colid < trimtx_col_start) || (!is_lower_tri && colid >= rectspmtx_col_start) ) {
+          // increment row_map_rectspmtx(i+1)
+          //++row_map_rectspmtx(i+1);
+          entries_rectspmtx(new_idx_offset) = colid;
+          ++new_idx_offset;
+        }
+      }
+
+    });
+  
+  // alloc dense tri mtx
+  auto dense_trimtx_partition = thandle.get_dense_trimtx_partition();
+  dense_trimtx_partition = typename TriSolveHandle::mtx_scalar_view_t("dense_tri_mtx", dense_partition_nrows, dense_partition_nrows);
+
+#if 0
+  // FIXME BELOW IS OLD STUFF, may have useful indexing to not have to rethink but will delete soon...
+  //
   // TODO Should I have the outer/public symbolic phase call this routine for the partition-type algorithms, create subviews and then call
   // the level scheduling based routines?
 
   // TODO Where should this partition_phase be called? I will reuse the existing symbolic routines on the sparse partition of the matrix,
   // but I intend to use subviews for that
   // TODO Allocate dense mtx and tri here, or in the handle initialization? Will need to reset if symbolic is called again with different params, but the handle should be reset in that case anyway...
-  typedef typename TriSolveHandle::size_type size_type;
 
   // TODO Symbolic should be called once - determines level_list, nodes_grouped_by_level, nodes_per_level for a fixed structure; allocates the views for dense matrix copies
   //          subviews for the sparse partitions will need to be created here to determine data mentioned above
@@ -456,15 +621,19 @@ void symbolic_dense_partition_algm( TriSolveHandle &thandle, const RowMapType dr
   //        destroy handle
   //
   //
-  auto dense_start_row = thandle.get_dense_start_row();
+
+  auto dense_start_row = thandle.get_dense_partition_row_start();
 
   // FIXME Inefficient way to get this value, do this in the handle? Otherwise, store it in the handle?
   auto h_row_map = Kokkos::create_mirror_view(drow_map);
   Kokkos::deep_copy(h_row_map, drow_map);
   auto num_spentries = h_row_map(dense_start_row); // number of items (nnz) from the entries array in the sparse partition
 
-  thandle.set_num_sparse_part_nnz(num_spentries);
+  thandle.set_nnz_persist_sptrimtx(num_spentries);
 
+  // Create persisting sparse partition of the matrix - subview of row_map with offsets into original entries and values should suffice
+  // Still starting at row 0, but ending at rowid < nrows - 1
+  // TODO Check if above statment holds - are assumptions about starting nodes during level scheduling broken???
   auto sprow_map = Kokkos::subview(drow_map, Kokkos::pair<size_type,size_type>(0, dense_start_row+1));
   // Need the offset into entries and vals; for sparse partition want the range [ 0, drow_map(dense_start_row) )
   auto spentries = Kokkos::subview(dentries, Kokkos::pair<size_type,size_type>(0, num_spentries));
@@ -474,6 +643,14 @@ void symbolic_dense_partition_algm( TriSolveHandle &thandle, const RowMapType dr
   else {
     upper_tri_symbolic(thandle, sprow_map, spentries);
   }
+#else
+  if (thandle.is_lower_tri()) {
+    lower_tri_symbolic(thandle, sprow_map, dentries);
+  }
+  else {
+    upper_tri_symbolic(thandle, sprow_map, dentries);
+  }
+#endif
 }
 
 
@@ -482,14 +659,148 @@ void numeric_dense_partition_algm(TriSolveHandle &thandle, const RowMapType drow
 
   typedef typename TriSolveHandle::size_type size_type;
 
-  auto dense_start_row = thandle.get_dense_start_row();
+  auto dense_partition_nrows = thandle.get_dense_partition_nrows() ;
+  auto dense_row_start = thandle.get_dense_partition_row_start();
+
+  size_type rectsptmx_nnz = 0;
+  size_type rectspmtx_col_start;
+  size_type trimtx_col_start;
+
+  auto row_map_rectspmtx = thandle.get_row_map_rectspmtx_partition();
+
+  bool is_lower_tri = thandle.is_lower_tri();
+
+  if (is_lower_tri) {
+    rectspmtx_col_start = 0; // ends at trimtx_col_start
+    trimtx_col_start = dense_row_start; // ends at nrows
+  }
+  else {
+    rectspmtx_col_start = dense_partition_nrows; // ends at nrows
+    trimtx_col_start = 0; // ends at rectspmtx_col_start
+  }
+
+
+
+  auto dense_trimtx_partition = thandle.get_dense_trimtx_partition();
+
+  auto values_rectspmtx_partition = thandle.get_values_rectspmtx_partition();
+
+  // fill rectspmtx values array and dense trimtx
+  Kokkos::parallel_for("numeric values fill init", Kokkos::RangePolicy<Kokkos::DefaultExecutionSpace>(0, dense_partition_nrows),
+    KOKKOS_LAMBDA (const size_type i) {
+      // Iterate over partition of original matrix to extract the indices in the rectangular sparse matrix partition
+      size_type offset_start = cprow_map(i);
+      size_type offset_end   = cprow_map(i+1);
+
+      //auto idx_count_this_row = row_map_rectspmtx(i+1) - row_map_rectspmtx(i);
+      auto new_idx_offset = row_map_rectspmtx(i);
+
+      for (size_type offset = offset_start; offset < offset_end; ++offset) {
+        size_type colid = dentries(offset);
+        auto val = dvalues(offset);
+        // Count in-sparse-rect entries per row, store at row_map(rowid+1) in anticipation of followup scan
+        if ( (is_lower_tri && colid < trimtx_col_start) || (!is_lower_tri && colid >= rectspmtx_col_start) ) {
+          // increment row_map_rectspmtx(i+1)
+          //++row_map_rectspmtx(i+1);
+          values_rectspmtx(new_idx_offset) = val;
+          ++new_idx_offset;
+        }
+        else {
+          trimtx_col_start(i, colid) = val;
+        }
+      }
+
+    });
+  
+
+// OLD STUFF
+
+#if 0
+
+  // Current:
+  // handle: allocates views for the "dense" partitions
+  // symb creates subviews of "sparse" partition then runs lvl scheduling using them
+  // num  fills the "dense" partitions; requires retrieving from the row_map the shifted start into the entries array 
+  //
+  // Update:
+  // handle: Add "subviews" for the sparse partitions, sparse-dense partitions, dense tri matrix, store start_offset into entries
+  // symb:   allocate dense tri subview, sparse partition subviews
+  // num:    subviews for dense partition spmv matrix
+  // solve:  retrieve matrices above, replace gemv with spmv
+
+
+  // Move this stuff to symbolic
+  typedef Kokkos::View<size_type, typename RowMapType::memory_space> ShiftedEntriesStart;
+  typedef Kokkos::View<typename RowMapType::non_const_value_type, typename RowMapType::array_layout, typename RowMapType::memory_space> MngRowMapType;
+
+  auto dense_start_row = thandle.get_dense_partition_row_start();
+
+  std::cout << "  Begin numeric" << std::endl;
+  std::cout << "  dense_start_row = " << dense_start_row << std::endl;
+
+  ShiftedEntriesStart shifted_entries_start(Kokkos::ViewAllocateWithoutInitializing("ses"));
 
   auto cprow_map = Kokkos::subview(drow_map, Kokkos::pair<size_type,size_type>(dense_start_row, drow_map.extent(0)));
+  //auto shifted_dense_row_map = Kokkos::create_mirror(cprow_map);
+  MngRowMapType shifted_dense_row_map("shifted_dense_row_map", drow_map.extent(0));
+
+  Kokkos::parallel_for("shifted_dense_row_map_set", Kokkos::RangePolicy<Kokkos::DefaultExecutionSpace>(0, shifted_dense_row_map.extent(0)),
+    KOKKOS_LAMBDA (const size_type i) {
+      if ( i == 0 )
+        shifted_entries_start() = cprow_map(0);
+
+      shifted_dense_row_map(i) = cprow_map(i) - cprow_map(0);
+    });
+
+// [ x 0 0 0 0
+//   0 x x 0 0
+//   0 0 x x 0
+//   0 0 0 x x
+//   0 0 0 0 x ]
+
+// Rows are shifted - "cut off" the upper sparse partition
+// Colids stay the same, but need to offset into idx properly
+//
+// Example
+// nrows = 5
+// ptr: 0 1 3 5 7 8
+// idx: 0 | 1 2 | 2 3 | 3 4 | 4
+// nnz_per_row: 1 2 2 2 1
+// shift: start at row 3
+// partial_ptr (via subview): 5 7 8
+// offset idx ignore entries up to ptr(shift) == ptr(3) == 5 == partial_ptr(0), the new start; end == idx.extent(0) == 8
+// offset_idx: x | x x | x x | 3 4 | 4
+// shifted_ptr sub 5: 0 2 3
+// shifted_idx (via subview):  3 4 | 4
+
 
   // Very inefficient, but need the offset?
   //auto h_row_map = Kokkos::create_mirror_view(drow_map);
   //Kokkos::deep_copy(h_row_map, drow_map);
 
+  auto h_shifted_entries_start_view = Kokkos::create_mirror_view(shifted_entries_start);
+  Kokkos::deep_copy(h_shifted_entries_start_view, shifted_entries_start);
+  //RowMapType::value_type h_shifted_entries_start;
+  //Kokkos::deep_copy(h_shifted_entries_start, shifted_entries_start);
+
+  typename RowMapType::value_type h_shifted_entries_end = drow_map.extent(0);
+
+  typename TriSolveHandle::nnz_lno_unmanaged_view_t shifted_dense_entries = Kokkos::subview(dentries, Kokkos::pair<size_type,size_type>(h_shifted_entries_start_view(), h_shifted_entries_end)); // this is for "dense" portion
+
+  //auto shifted_dense_entries = Kokkos::subview(dentries, Kokkos::pair<size_type,size_type>(h_shifted_entries_start_view(), h_shifted_entries_end)); // this is for "dense" portion
+
+  typename TriSolveHandle::nnz_scalar_unmanaged_view_t shifted_dense_values  = Kokkos::subview(dvals, Kokkos::pair<size_type,size_type>(h_shifted_entries_start_view(), h_shifted_entries_end)); // this is for "dense" portion
+  //auto shifted_dense_values  = Kokkos::subview(dvals, Kokkos::pair<size_type,size_type>(h_shifted_entries_start_view(), h_shifted_entries_end)); // this is for "dense" portion
+
+  std::cout << "  numeric subview types" << std::endl;
+  std::cout << "    dentries type: " << typeid(dentries).name() << std::endl;
+  std::cout << "    shifted_dense_entries type: " << typeid(shifted_dense_entries).name() << std::endl;
+  std::cout << "    dvals type: " << typeid(dvals).name() << std::endl;
+  std::cout << "    shifted_dense_values type: " << typeid(shifted_dense_values).name() << std::endl;
+
+  // FIXME TODO Use the shifted sparse matrix components just created above for the spmv rather than the dense gemv in the solve
+
+  // OLD
   //auto cp_entries_start = h_row_map(dense_start_row+1);
   //auto cp_entries_end = h_row_map(drow_map.extent(0));
 
@@ -499,7 +810,7 @@ void numeric_dense_partition_algm(TriSolveHandle &thandle, const RowMapType drow
 
   // Fill the dense_mtx
   auto dense_mtx = thandle.get_dense_mtx_partition();
-  auto dense_tri = thandle.get_dense_tri_partition();
+  auto dense_tri = thandle.get_dense_trimtx_partition();
 
   // TODO If resetting the matrix values, but structure the same, need to re-zero the dense matrices
   // TODO Zero the matrices here, and alloc without initializing in handle (or symbolic)?
@@ -529,6 +840,8 @@ void numeric_dense_partition_algm(TriSolveHandle &thandle, const RowMapType drow
       }
     }
   });
+
+#endif
 
   thandle.set_numeric_complete();
 }

@@ -76,7 +76,7 @@ enum {DEFAULT, CUSPARSE, LVLSCHED_RP, LVLSCHED_TP1, LVLSCHED_TP2, LVLSCHED_TP1CH
 
 
 template<typename Scalar>
-int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const std::string& ufilename, const int team_size, const int vector_length, const int idx_offset, const int loop, const int chain_threshold = 0) {
+int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const std::string& ufilename, const int team_size, const int vector_length, const int idx_offset, const int loop, const int chain_threshold = 0, const float dense_row_percent = -1.0) {
 
   typedef Scalar scalar_t;
   typedef int lno_t;
@@ -129,6 +129,12 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
     auto entries = graph.entries;
     auto values  = triMtx.values;
 
+    std::cout << "Lower Perf: row_map.extent(0) = " << row_map.extent(0) << std::endl;
+    std::cout << "Lower Perf: entries.extent(0) = " << entries.extent(0) << std::endl;
+    std::cout << "Lower Perf: values.extent(0) = " << values.extent(0) << std::endl;
+
+    std::cout << "Lower Perf: lhs.extent(0) = " << lhs.extent(0) << std::endl;
+    std::cout << "Lower Perf: rhs.extent(0) = " << rhs.extent(0) << std::endl;
 
 #ifdef KOKKOSKERNELS_ENABLE_TPL_CUSPARSE
   //std::cout << "  cusparse: create handle" << std::endl;
@@ -182,7 +188,7 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
     KernelHandle kh;
     bool is_lower_tri = true;
 
-    std::cout << "Create handle" << std::endl;
+    std::cout << "Create handle (lower)" << std::endl;
     switch(test) {
       case LVLSCHED_RP:
         kh.create_sptrsv_handle(SPTRSVAlgorithm::SEQLVLSCHD_RP, nrows, is_lower_tri);
@@ -210,9 +216,11 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
         kh.get_sptrsv_handle()->print_algorithm();
         break;
       case LVLSCHED_DENSEP_TP1:
+        printf("dense_row_percent %d\n", dense_row_percent);
         kh.create_sptrsv_handle(SPTRSVAlgorithm::SEQLVLSCHD_DENSEP_TP1, nrows, is_lower_tri);
         kh.get_sptrsv_handle()->reset_chain_threshold(chain_threshold);
         if (team_size != -1) kh.get_sptrsv_handle()->set_team_size(team_size);
+        if (dense_row_percent != -1) kh.get_sptrsv_handle()->set_dense_partition_row_percent(dense_row_percent);
         kh.get_sptrsv_handle()->print_algorithm();
         break;
       case CUSPARSE:
@@ -442,7 +450,7 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
     KernelHandle kh;
     bool is_lower_tri = false;
 
-    std::cout << "Create handle" << std::endl;
+    std::cout << "Create handle (upper)" << std::endl;
     switch(test) {
       case LVLSCHED_RP:
         kh.create_sptrsv_handle(SPTRSVAlgorithm::SEQLVLSCHD_RP, nrows, is_lower_tri);
@@ -473,6 +481,7 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
         kh.create_sptrsv_handle(SPTRSVAlgorithm::SEQLVLSCHD_DENSEP_TP1, nrows, is_lower_tri);
         kh.get_sptrsv_handle()->reset_chain_threshold(chain_threshold);
         if (team_size != -1) kh.get_sptrsv_handle()->set_team_size(team_size);
+        if (dense_row_percent != -1) kh.get_sptrsv_handle()->set_dense_partition_row_percent(dense_row_percent);
         kh.get_sptrsv_handle()->print_algorithm();
         break;
       case CUSPARSE:
@@ -628,7 +637,7 @@ void print_help_sptrsv() {
   printf("Options:\n");
   printf("  --test [OPTION] : Use different kernel implementations\n");
   printf("                    Options:\n");
-  printf("                      lvlrp, lvltp1, lvltp2 lvltp1chain\n\n");
+  printf("                      lvlrp, lvltp1, lvltp2, lvltp1chain, lvldensetp1\n\n");
   printf("                      cusparse           (Vendor Libraries)\n\n");
   printf("  -lf [file]      : Read in Matrix Market formatted text file 'file'.\n");
   printf("  -uf [file]      : Read in Matrix Market formatted text file 'file'.\n");
@@ -637,6 +646,7 @@ void print_help_sptrsv() {
   printf("  -ts [T]         : Number of threads per team.\n");
   printf("  -vl [V]         : Vector-length (i.e. how many Cuda threads are a Kokkos 'thread').\n");
   printf("  -ct [V]         : Chain threshold: Only has effect of lvltp1chain algorithm.\n");
+  printf("  -dr [V]         : Dense row percent (as float): Only has effect of lvldensetp1 algorithm.\n");
   printf("  --loop [LOOP]   : How many spmv to run to aggregate average time. \n");
 //  printf("  --write-lvl-freq: Write output files with number of nodes per level for each matrix and algorithm.\n");
 //  printf("  -s [N]          : generate a semi-random banded (band size 0.01xN) NxN matrix\n");
@@ -659,6 +669,7 @@ int main(int argc, char **argv)
  int idx_offset = 0;
  int loop = 1;
  int chain_threshold = 0;
+ float dense_row_percent = -1.0;
 // int schedule=AUTO;
 
  if(argc == 1) {
@@ -695,6 +706,7 @@ int main(int argc, char **argv)
   if((strcmp(argv[i],"-ts")==0)) {team_size=atoi(argv[++i]); continue;}
   if((strcmp(argv[i],"-vl")==0)) {vector_length=atoi(argv[++i]); continue;}
   if((strcmp(argv[i],"-ct")==0)) {chain_threshold=atoi(argv[++i]); continue;}
+  if((strcmp(argv[i],"-dr")==0)) {dense_row_percent=atof(argv[++i]); continue;}
   if((strcmp(argv[i],"--offset")==0)) {idx_offset=atoi(argv[++i]); continue;}
   if((strcmp(argv[i],"--loop")==0)) {loop=atoi(argv[++i]); continue;}
 /*
@@ -727,7 +739,7 @@ int main(int argc, char **argv)
 
  Kokkos::initialize(argc,argv);
  {
-   int total_errors = test_sptrsv_perf<double>(tests, lfilename, ufilename, team_size, vector_length, idx_offset, loop, chain_threshold);
+   int total_errors = test_sptrsv_perf<double>(tests, lfilename, ufilename, team_size, vector_length, idx_offset, loop, chain_threshold, dense_row_percent);
 
    if(total_errors == 0)
    printf("Kokkos::SPTRSV Test: Passed\n");
