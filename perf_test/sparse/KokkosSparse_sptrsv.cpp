@@ -216,7 +216,7 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
         kh.get_sptrsv_handle()->print_algorithm();
         break;
       case LVLSCHED_DENSEP_TP1:
-        printf("dense_row_percent %d\n", dense_row_percent);
+        printf("dense_row_percent %f\n", dense_row_percent);
         kh.create_sptrsv_handle(SPTRSVAlgorithm::SEQLVLSCHD_DENSEP_TP1, nrows, is_lower_tri);
         kh.get_sptrsv_handle()->reset_chain_threshold(chain_threshold);
         if (team_size != -1) kh.get_sptrsv_handle()->set_team_size(team_size);

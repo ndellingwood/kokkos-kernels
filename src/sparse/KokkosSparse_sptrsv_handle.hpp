@@ -107,6 +107,7 @@ public:
   typedef Kokkos::View< signed_integral_t*, typename nnz_row_view_t::array_layout, typename nnz_row_view_t::device_type, typename nnz_row_view_t::memory_traits > signed_nnz_lno_view_t;
   typedef typename signed_nnz_lno_view_t::HostMirror host_signed_nnz_lno_view_t;
 
+  typedef typename Kokkos::View<scalar_t **, HandlePersistentMemorySpace> mtx_scalar_view_t;
 
 private:
 
@@ -187,7 +188,6 @@ private:
   //   upper_tri - the region [cutoff, nrows) is the sparse region, [0, cutoff) the "dense" partition
   //
   // KokkosBlas::gemv and cublas:trsv expect rank2 views/data for the matrix
-  typedef typename Kokkos::View<scalar_t **, HandlePersistentMemorySpace> mtx_scalar_view_t;
   // Starting row for the dense partition, which will have a sparse rectangular matrix and dense triangular matrix
 
   // These two variables, with nrows, also determine that row_start and rows for the persist_sptrimtx (assumption differs for upper vs lower tri)
@@ -633,7 +633,7 @@ public:
   mtx_scalar_view_t get_dense_mtx_partition() const { return dense_matrix_partition; } // FIXME Need to remove and replace with subview components in sparse components
 
   KOKKOS_INLINE_FUNCTION
-  mtx_scalar_view_t get_dense_trimtx_partition() const { return dense_trimtx_partition; }
+  mtx_scalar_view_t get_dense_trimtx_partition() { return dense_trimtx_partition; }
 
 
 
