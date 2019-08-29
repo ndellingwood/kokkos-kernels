@@ -50,6 +50,7 @@
 #include <KokkosKernels_config.h>
 #include <Kokkos_ArithTraits.hpp>
 #include <KokkosSparse_sptrsv_handle.hpp>
+#include <KokkosSparse_spmv.hpp>
 
 //#define LVL_OUTPUT_INFO
 //#define CHAIN_DEBUG_OUTPUT
@@ -1437,13 +1438,13 @@ cudaProfilerStop();
 
 #ifdef DENSEPARTITION
 template < class TriSolveHandle, class RowMapType, class EntriesType, class ValuesType, class RHSType, class LHSType >
-void tri_solve_partition_dense(TriSolveHandle & thandle, const RowMapType frow_map, const EntriesType fentries, const ValuesType fvalues, const RHSType & frhs, LHSType & flhs, const bool is_lower) {
+void tri_solve_partition_dense(TriSolveHandle & thandle, const RowMapType frow_map, const EntriesType entries, const ValuesType values, const RHSType & frhs, LHSType & flhs, const bool is_lower) {
 
   typedef typename TriSolveHandle::execution_space execution_space;
   typedef typename TriSolveHandle::size_type size_type;
   typedef typename TriSolveHandle::nnz_lno_view_t NGBLType;
 
-// Partitioned matrix tri solve
+// Partitioned matrix lower tri solve
 // 1. Solve the sparse portion as before - symbolic was already conducted using subview matrices for this
 //    - Will require taking subviews of the input arrays
 //    - fence()
@@ -1453,16 +1454,27 @@ void tri_solve_partition_dense(TriSolveHandle & thandle, const RowMapType frow_m
 
 
 // Part 1. Sparse partition of the matrix, computation done as in other algorithms, just need to take subviews of the input view arrays
-  auto dense_start_row = thandle.get_dense_partition_row_start();
-  auto num_spentries = thandle.get_nnz_persist_spmtx();
+  auto dense_row_start = thandle.get_dense_partition_row_start();
+  //auto dense_partition_nrows = thandle.get_dense_partition_nrows() ;
 
-  auto row_map = Kokkos::subview(frow_map, Kokkos::pair<size_type,size_type>(0, dense_start_row+1));
-  // Need the offset into entries and vals; for sparse partition want the range [ 0, drow_map(dense_start_row) )
-  auto entries = Kokkos::subview(fentries, Kokkos::pair<size_type,size_type>(0, num_spentries));
-  auto values = Kokkos::subview(fvalues, Kokkos::pair<size_type,size_type>(0, num_spentries));
+  //auto persist_sptrimtx_nrows = thandle.get_persist_sptrimtx_nrows();
 
-  auto rhs = Kokkos::subview(frhs, Kokkos::pair<size_type,size_type>(0, dense_start_row));
-  auto lhs = Kokkos::subview(flhs, Kokkos::pair<size_type,size_type>(0, dense_start_row));
+
+  auto row_map = Kokkos::subview(frow_map, Kokkos::pair<size_type,size_type>(0, dense_row_start+1));
+  // Need the offset into entries and vals; for sparse partition want the range [ 0, drow_map(dense_row_start) )
+  // FIXME This shouldn't be needed
+  //auto num_spentries = thandle.get_nnz_persist_spmtx();
+  //auto entries = Kokkos::subview(fentries, Kokkos::pair<size_type,size_type>(0, num_spentries));
+  // FIXME This shouldn't be needed
+  //auto values = Kokkos::subview(fvalues, Kokkos::pair<size_type,size_type>(0, num_spentries));
+
+  auto rhs = Kokkos::subview(frhs, Kokkos::pair<size_type,size_type>(0, dense_row_start));
+  auto lhs = Kokkos::subview(flhs, Kokkos::pair<size_type,size_type>(0, dense_row_start));
+
+  // upper versions:
+  //auto row_map = Kokkos::subview(frow_map, Kokkos::pair<size_type,size_type>(dense_row_start,frow_map.extent(0)));
+  //auto rhs = Kokkos::subview(frhs, Kokkos::pair<size_type,size_type>(dense_row_start, frhs.extent(0)));
+  //auto lhs = Kokkos::subview(flhs, Kokkos::pair<size_type,size_type>(dense_row_start, flhs.extent(0)));
 
 #if defined(KOKKOS_ENABLE_CUDA) && defined(KOKKOSPSTRSV_SOLVE_IMPL_PROFILE)
 cudaProfilerStop();
@@ -1661,12 +1673,21 @@ cudaProfilerStop();
 //           1. lhsp = Kokkos::subview(flhs, pair(cutoff,nrows); rhsp = Kokkos::subview(frhs, pair(cutoff,nrows); deep_copy(lhsp, rhsp);
 //           2. gemv("N", -1.0, dense_mtx, lhs, 1.0, lhsp); (where rhsp i.e. b was copied into lhsp, and lhs is the solution from part 1)
 //           3. Kokkos::fence(); ?
-  auto dense_mtx = thandle.get_dense_mtx_partition(); // FIXME Need to remove and replace with subview components in sparse components
+  //auto dense_mtx = thandle.get_dense_mtx_partition(); // FIXME Need to remove and replace with subview components in sparse components
   auto dense_tri = thandle.get_dense_trimtx_partition();
 
-  auto lhsp = Kokkos::subview(flhs, Kokkos::pair<size_type, size_type>(dense_start_row, flhs.extent(0))); 
-  auto rhsp = Kokkos::subview(frhs, Kokkos::pair<size_type, size_type>(dense_start_row, frhs.extent(0))); 
+  // lower tri
+  auto lhsp = Kokkos::subview(flhs, Kokkos::pair<size_type, size_type>(dense_row_start, flhs.extent(0))); 
+  auto rhsp = Kokkos::subview(frhs, Kokkos::pair<size_type, size_type>(dense_row_start, frhs.extent(0))); 
+  // upper tri - FIXME This must happen at the start of the solve
+  //auto lhsp = Kokkos::subview(flhs, Kokkos::pair<size_type, size_type>(0,dense_row_start)); 
+  //auto rhsp = Kokkos::subview(frhs, Kokkos::pair<size_type, size_type>(0,dense_row_start)); 
   Kokkos::deep_copy(lhsp, rhsp);
+
+  //auto row_map_rectspmtx = thandle.get_row_map_rectspmtx_partition();
+  //Create KokkosSparse::CrsMatrix from modified row_map, entries, and values
+  // This may require "shifting" the modified row_map, subview the entries and values and shift the entries array by subtracting out colid shift
+  //KokkosSparse::spmv("N", -1.0, k_persist_rectspmtx, lhs, 1.0, lhsp); //(where rhsp i.e. b was copied into lhsp, and lhs is the solution from part 1)
 
 // Part 3. dense trisolve for remaining dense portion of x - use x as rhs and lhs in this step
 //           * Treat lhsp as partially updated rhsp, overwrite for final result
@@ -1706,6 +1727,8 @@ cudaProfilerStop();
         printf ("CUBLAS handle destroy failed\n");
         return EXIT_FAILURE;
     }
+#else
+    // Call BLAS routine...
 #endif
 
 
