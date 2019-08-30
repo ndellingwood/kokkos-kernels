@@ -177,6 +177,7 @@ void lower_tri_symbolic (TriSolveHandle &thandle, const RowMapType drow_map, con
 #ifdef TRISOLVE_SYMB_TIMERS
   Kokkos::Timer timer_sym_lowertri_total;
 #endif
+  std::cout << "  Begin lower_tri symbolic" << std::endl;
 
  if ( thandle.algm_requires_symb_lvlsched() )
  {
@@ -231,11 +232,13 @@ void lower_tri_symbolic (TriSolveHandle &thandle, const RowMapType drow_map, con
   size_type level = 0;
   // FIXME Change this to allow for partitioned sparse mtx
 #ifdef DENSEPARTITION
-  auto starting_node = thandle.get_lvlsched_node_start();
-  auto ending_node = thandle.get_lvlsched_node_end();
+  //auto starting_node = thandle.get_lvlsched_node_start();
+  //auto ending_node = thandle.get_lvlsched_node_end();
+  auto starting_node = 0;
+  auto ending_node = nrows;
 #else
   auto starting_node = 0;
-  auto ending_node = nrows
+  auto ending_node = nrows;
 #endif
 
   level_list(starting_node) = level;
@@ -255,7 +258,6 @@ void lower_tri_symbolic (TriSolveHandle &thandle, const RowMapType drow_map, con
         for (signed_integral_t offset = ptrstart; offset < ptrend; ++offset) {
           size_type col = entries(offset);
           // FIXME: For lower_tri, colid is unchanged; shifted for upper_tri...
-          // FIXME: This check for col != row vs col < row will be broken with partial persist_sptrimtx, since using a row_map with rowid shifted to 0 but not colid
           if ( previous_level_list(col) == -1 && col != row ) { // unmarked
             if ( col < row ) {
               is_root = false;
@@ -287,15 +289,17 @@ void lower_tri_symbolic (TriSolveHandle &thandle, const RowMapType drow_map, con
     }
 
     level += 1;
+    //std::cout << "  node_count = " << node_count << "  level = " << level << "  nrows = " << nrows << std::endl;
   } // end while
 
   thandle.set_symbolic_complete();
   thandle.set_num_levels(level);
 
   // Create the chain now
- if ( thandle.algm_requires_symb_chain() ) {
-   symbolic_chain_phase(thandle, nodes_per_level);
- }
+  if ( thandle.algm_requires_symb_chain() ) {
+    std::cout << "  Symbolic chain phase begin" << std::endl;
+    symbolic_chain_phase(thandle, nodes_per_level);
+  }
 
   // Output check
 #ifdef LVL_OUTPUT_INFO
@@ -330,6 +334,8 @@ void upper_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, co
 #ifdef TRISOLVE_SYMB_TIMERS
   Kokkos::Timer timer_sym_uppertri_total;
 #endif
+
+  std::cout << "  Begin upper_tri symbolic" << std::endl;
 
  if ( thandle.algm_requires_symb_lvlsched() )
  {
@@ -646,11 +652,15 @@ print_view1d_symbolic(row_map_rectspmtx);
   
   // alloc dense tri mtx
   thandle.alloc_dense_trimtx(dense_partition_nrows, dense_partition_nrows);
+  Kokkos::fence();
   auto dense_trimtx= thandle.get_dense_trimtx();
 
   auto sptrimtx_row_start = thandle.get_persist_sptrimtx_row_start();
   auto sptrimtx_nrows = thandle.get_persist_sptrimtx_nrows();
   auto sptrimtx_row_map = Kokkos::subview( drow_map, Kokkos::pair<size_type,size_type>(sptrimtx_row_start, sptrimtx_row_start+sptrimtx_nrows+1) );
+  Kokkos::fence();
+
+  std::cout << "  Call lvl schedule symbolic" << std::endl;
 
   if (thandle.is_lower_tri()) {
     lower_tri_symbolic(thandle, sptrimtx_row_map, dentries);

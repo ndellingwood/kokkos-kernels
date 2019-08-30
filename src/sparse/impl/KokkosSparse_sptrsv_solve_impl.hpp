@@ -1596,9 +1596,9 @@ cudaProfilerStop();
   #ifdef TRISOLVE_TIMERS
       // full-solve time
       tp1_ctr++;
-      std::cout << "  *** Calling non-single-block solve *** " << std::endl;
-      std::cout << "      team_size = " << team_size << std::endl;
-      std::cout << "      lvl_nodes = " << lvl_nodes << std::endl;
+      //std::cout << "  *** Calling non-single-block solve *** " << std::endl;
+      //std::cout << "      team_size = " << team_size << std::endl;
+      //std::cout << "      lvl_nodes = " << lvl_nodes << std::endl;
       timer_full_solve.reset();
   #endif
 
@@ -1636,7 +1636,7 @@ cudaProfilerStop();
       // full-solve time
       time_iter = timer_full_solve.seconds();
       time_full_solves += time_iter;
-      std::cout << "  tp1 iter: " << tp1_ctr << "  time_iter = " << time_iter << std::endl;
+      //std::cout << "  tp1 iter: " << tp1_ctr << "  time_iter = " << time_iter << std::endl;
       //time_full_solves += timer_full_solve.seconds();
   #endif
     }
@@ -1706,7 +1706,7 @@ cudaProfilerStop();
      // full-solve time
       time_iter = timer_chain_solve.seconds();
       time_chain_solves += time_iter;
-      std::cout << "  chain iter: " << chain_ctr << "  time_iter = " << time_iter << std::endl;
+      //std::cout << "  chain iter: " << chain_ctr << "  time_iter = " << time_iter << std::endl;
       //time_chain_solves += timer_chain_solve.seconds();
   #endif
     } // end else
@@ -1735,7 +1735,7 @@ cudaProfilerStop();
   //Create KokkosSparse::CrsMatrix from modified row_map, entries, and values
   // This may require "shifting" the modified row_map, subview the entries and values and shift the entries array by subtracting out colid shift
   // lowertri
-
+ if (dense_nrows > 0) {
   #ifdef TRISOLVE_TIMERS
   double time_rectspmtx_total = 0.0, time_spmv = 0.0;
   Kokkos::Timer timer_rectspmtx;
@@ -1776,6 +1776,8 @@ cudaProfilerStop();
   // spmv("trans", alpha, A, x, beta, y)
   KokkosSparse::spmv("N", -1.0, crs_rectspmtx, lhs, 1.0, lhsp); //(where rhsp i.e. b was copied into lhsp, and lhs is the solution from part 1)
 
+  // TODO Is this necessary???
+  Kokkos::fence();
   #ifdef TRISOLVE_TIMERS
   time_spmv += timer_rectspmtx.seconds();
   #endif
@@ -1784,8 +1786,6 @@ cudaProfilerStop();
   std::cout << "Post-spmv intermediate lhsp" << std::endl;
   print_view1d_solve(lhsp);
 #endif
-  // TODO Is this necessary???
-  Kokkos::fence();
 
 
 // Part 3. dense trisolve for remaining dense portion of x - use x as rhs and lhs in this step
@@ -1854,10 +1854,18 @@ cudaProfilerStop();
       }
     });
 #endif
+
+  Kokkos::fence();
+
   #ifdef TRISOLVE_TIMERS
   time_densetri += timer_densetri.seconds();
+  std::cout << "********************************" << std::endl; 
+  std::cout << "  tri_solve_partition: spmv setup = " << time_rectspmtx_total << std::endl;
+  std::cout << "  tri_solve_partition: spmv time = " << time_spmv << std::endl;
+  std::cout << "  tri_solve_partition: dense_tri time = " << time_densetri << std::endl;
+  std::cout << "********************************" << std::endl; 
   #endif
-
+ }
 #ifdef PRINT1DVIEWS
   std::cout << "Output dense partition solution" << std::endl;
   print_view1d_solve(lhsp);
@@ -1876,9 +1884,6 @@ cudaProfilerStop();
   std::cout << "      single-block solve count = " << chain_ctr << std::endl;
   std::cout << "  tri_solve_chain: total if-else solve times = " << time_wrapped_ifelse << std::endl;
 
-  std::cout << "  tri_solve_partition: spmv setup = " << time_rectspmtx_total << std::endl;
-  std::cout << "  tri_solve_partition: spmv time = " << time_spmv << std::endl;
-  std::cout << "  tri_solve_partition: dense_tri time = " << time_densetri << std::endl;
   std::cout << "********************************" << std::endl; 
 #endif
 
