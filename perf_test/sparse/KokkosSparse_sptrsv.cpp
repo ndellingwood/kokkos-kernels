@@ -64,6 +64,8 @@
 #include "KokkosSparse_CrsMatrix.hpp"
 #include <KokkosKernels_IOUtils.hpp>
 
+#define PRINTVIEWS
+
 #if defined( KOKKOS_ENABLE_CXX11_DISPATCH_LAMBDA ) && (!defined(KOKKOS_ENABLE_CUDA) || ( 8000 <= CUDA_VERSION ))
 using namespace KokkosSparse;
 using namespace KokkosSparse::Experimental;
@@ -74,6 +76,16 @@ using namespace KokkosKernels::Experimental;
 
 enum {DEFAULT, CUSPARSE, LVLSCHED_RP, LVLSCHED_TP1, LVLSCHED_TP2, LVLSCHED_TP1CHAIN, LVLSCHED_DENSEP_TP1};
 
+#ifdef PRINTVIEWS
+template <class ViewType>
+void print_view1d(const ViewType v) {
+  std::cout << "Output for view " << v.label() << std::endl;
+  for (size_t i = 0; i < v.extent(0); ++i) {
+    std::cout << "v(" << i << ") = " << v(i) << " , ";
+  }
+  std::cout << std::endl;
+}
+#endif
 
 template<typename Scalar>
 int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const std::string& ufilename, const int team_size, const int vector_length, const int idx_offset, const int loop, const int chain_threshold = 0, const float dense_row_percent = -1.0) {
@@ -135,6 +147,14 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
 
     std::cout << "Lower Perf: lhs.extent(0) = " << lhs.extent(0) << std::endl;
     std::cout << "Lower Perf: rhs.extent(0) = " << rhs.extent(0) << std::endl;
+
+#ifdef PRINTVIEWS
+    print_view1d(row_map);
+    print_view1d(entries);
+    print_view1d(values);
+    print_view1d(known_lhs);
+    print_view1d(rhs);
+#endif
 
 #ifdef KOKKOSKERNELS_ENABLE_TPL_CUSPARSE
   //std::cout << "  cusparse: create handle" << std::endl;
@@ -397,6 +417,21 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
     auto row_map = graph.row_map;
     auto entries = graph.entries;
     auto values  = triMtx.values;
+
+    std::cout << "Upper Perf: row_map.extent(0) = " << row_map.extent(0) << std::endl;
+    std::cout << "Upper Perf: entries.extent(0) = " << entries.extent(0) << std::endl;
+    std::cout << "Upper Perf: values.extent(0) = " << values.extent(0) << std::endl;
+
+    std::cout << "Upper Perf: lhs.extent(0) = " << lhs.extent(0) << std::endl;
+    std::cout << "Upper Perf: rhs.extent(0) = " << rhs.extent(0) << std::endl;
+
+#ifdef PRINTVIEWS
+    print_view1d(row_map);
+    print_view1d(entries);
+    print_view1d(values);
+    print_view1d(known_lhs);
+    print_view1d(rhs);
+#endif
 
 #ifdef KOKKOSKERNELS_ENABLE_TPL_CUSPARSE
   //std::cout << "  cusparse: create handle" << std::endl;

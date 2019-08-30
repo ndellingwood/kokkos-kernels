@@ -56,9 +56,10 @@
 #include <KokkosBatched_Trsv_Decl.hpp>
 #include <KokkosBatched_Trsv_Serial_Impl.hpp>
 
-//#define LVL_OUTPUT_INFO
+#define LVL_OUTPUT_INFO
 #define CHAIN_DEBUG_OUTPUT
 //#define TRISOLVE_TIMERS
+#define PRINT1DVIEWS
 
 #define KOKKOSPSTRSV_SOLVE_IMPL_PROFILE 1
 #if defined(KOKKOS_ENABLE_CUDA) && defined(KOKKOSPSTRSV_SOLVE_IMPL_PROFILE)
@@ -77,8 +78,20 @@ namespace Experimental {
 
 struct UnsortedTag {};
 
+#ifdef PRINT1DVIEWS
+template <class ViewType>
+void print_view1d(const ViewType dv) {
+  auto v = Kokkos::create_mirror_view(dv);
+  Kokkos::deep_copy(v, dv);
+  std::cout << "Output for view " << v.label() << std::endl;
+  for (size_t i = 0; i < v.extent(0); ++i) {
+    std::cout << "v(" << i << ") = " << v(i) << " , ";
+  }
+  std::cout << std::endl;
+}
+#endif
 
-// This functor unifies the lower and upper implementations, the hope is the "is_lower" check does not add noticable time on larger problems
+// This functor unifies the lower and upper implementations, the hope is the "is_lowertri" check does not add noticable time on larger problems
 template <class RowMapType, class EntriesType, class ValuesType, class LHSType, class RHSType, class NGBLType>
 struct TriLvlSchedTP1SolverFunctor
 {
@@ -122,7 +135,8 @@ struct TriLvlSchedTP1SolverFunctor
    // FIXME Need to pass dense_rows to these functors...
 #ifdef DENSEPARTITION
           auto original_col = entries(ptr);
-          auto colid = original_col - dense_nrows;
+          //auto colid = original_col - dense_nrows; //shift required for upper-tri
+          auto colid = is_lowertri ? original_col : original_col - dense_nrows; //shift required for upper-tri
 #else
           auto colid = entries(ptr);
 #endif
@@ -871,14 +885,14 @@ struct TriLvlSchedTP1SingleBlockFunctor
   long node_count; // like "block" offset into ngbl, my_league is the "local" offset
   long lvl_start;
   long lvl_end;
-  const bool is_lower;
+  const bool is_lowertri;
   const int dense_nrows;
   const int  cutoff;
   // team_size: each team can be assigned a row, if there are enough rows...
 
 
   TriLvlSchedTP1SingleBlockFunctor( const RowMapType &row_map_, const EntriesType &entries_, const ValuesType &values_, LHSType &lhs_, const RHSType &rhs_, const NGBLType &nodes_grouped_by_level_, NGBLType &nodes_per_level_, long node_count_, long lvl_start_, long lvl_end_, const bool is_lower_, const int dense_nrows_ = 0, const int cutoff_ = 0 ) :
-    row_map(row_map_), entries(entries_), values(values_), lhs(lhs_), rhs(rhs_), nodes_grouped_by_level(nodes_grouped_by_level_), nodes_per_level(nodes_per_level_), node_count(node_count_), lvl_start(lvl_start_), lvl_end(lvl_end_), is_lower(is_lower_), dense_nrows(dense_nrows_), cutoff(cutoff_) {}
+    row_map(row_map_), entries(entries_), values(values_), lhs(lhs_), rhs(rhs_), nodes_grouped_by_level(nodes_grouped_by_level_), nodes_per_level(nodes_per_level_), node_count(node_count_), lvl_start(lvl_start_), lvl_end(lvl_end_), is_lowertri(is_lower_), dense_nrows(dense_nrows_), cutoff(cutoff_) {}
 
   // SingleBlock: Only one block (or league) executing; team_rank used to map thread to row
 
@@ -924,7 +938,8 @@ struct TriLvlSchedTP1SingleBlockFunctor
    // FIXME Need to pass dense_rows to these functors...
 #ifdef DENSEPARTITION
           auto original_col = entries(ptr);
-          auto colid = original_col - dense_nrows;
+          auto colid = is_lowertri ? original_col : original_col - dense_nrows; //shift required for upper-tri
+          //auto colid = original_col - dense_nrows; //shift required for upper-tri
 #else
           auto colid = entries(ptr);
 #endif
@@ -938,7 +953,7 @@ struct TriLvlSchedTP1SingleBlockFunctor
           }
         }
         // ASSUMPTION: sorted diagonal value located at eoffset - 1 for lower tri, soffset for upper tri
-        if (is_lower)
+        if (is_lowertri)
           lhs(rowid) = (rhs_val+diff)/values(eoffset-1);
         else
           lhs(rowid) = (rhs_val+diff)/values(soffset);
@@ -996,7 +1011,8 @@ struct TriLvlSchedTP1SingleBlockFunctor
         for (auto ptr = soffset; ptr < eoffset; ++ptr) {
 #ifdef DENSEPARTITION
           auto original_col = entries(ptr);
-          auto colid = original_col - dense_nrows;
+          auto colid = is_lowertri ? original_col : original_col - dense_nrows; //shift required for upper-tri
+          //auto colid = original_col - dense_nrows; //shift required for upper-tri
 #else
           auto colid = entries(ptr);
 #endif
@@ -1009,7 +1025,7 @@ struct TriLvlSchedTP1SingleBlockFunctor
           }
         }
         // ASSUMPTION: sorted diagonal value located at eoffset - 1 for lower tri, soffset for upper tri
-        if (is_lower)
+        if (is_lowertri)
           lhs(rowid) = (rhs_val+diff)/values(eoffset-1);
         else
           lhs(rowid) = (rhs_val+diff)/values(soffset);
@@ -1268,7 +1284,7 @@ cudaProfilerStop();
 
 
 template < class TriSolveHandle, class RowMapType, class EntriesType, class ValuesType, class RHSType, class LHSType >
-void tri_solve_chain(TriSolveHandle & thandle, const RowMapType row_map, const EntriesType entries, const ValuesType values, const RHSType & rhs, LHSType &lhs, const bool is_lower) {
+void tri_solve_chain(TriSolveHandle & thandle, const RowMapType row_map, const EntriesType entries, const ValuesType values, const RHSType & rhs, LHSType &lhs, const bool is_lowertri) {
 
 #if defined(KOKKOS_ENABLE_CUDA) && defined(KOKKOSPSTRSV_SOLVE_IMPL_PROFILE)
 cudaProfilerStop();
@@ -1338,7 +1354,7 @@ cudaProfilerStop();
 #if defined(KOKKOS_ENABLE_CUDA) && defined(KOKKOSPSTRSV_SOLVE_IMPL_PROFILE)
 cudaProfilerStart();
 #endif
-        if (is_lower) {
+        if (is_lowertri) {
           // TODO Time changes between merged functor and individuals
           //LowerTriLvlSchedTP1SolverFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, node_count);
           TriLvlSchedTP1SolverFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, true, node_count);
@@ -1395,7 +1411,7 @@ cudaProfilerStop();
 #if defined(KOKKOS_ENABLE_CUDA) && defined(KOKKOSPSTRSV_SOLVE_IMPL_PROFILE)
 cudaProfilerStart();
 #endif
-        if (is_lower) {
+        if (is_lowertri) {
           if (cutoff <= team_size) {
             TriLvlSchedTP1SingleBlockFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, nodes_per_level, node_count, schain, echain, true);
 //          LowerTriLvlSchedTP1SingleBlockFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, nodes_per_level, node_count, schain, echain);
@@ -1475,7 +1491,7 @@ cudaProfilerStop();
 
 #ifdef DENSEPARTITION
 template < class TriSolveHandle, class RowMapType, class EntriesType, class ValuesType, class RHSType, class LHSType >
-void tri_solve_partition_dense(TriSolveHandle & thandle, const RowMapType frow_map, const EntriesType entries, const ValuesType values, const RHSType & frhs, LHSType & flhs, const bool is_lower) {
+void tri_solve_partition_dense(TriSolveHandle & thandle, const RowMapType frow_map, const EntriesType entries, const ValuesType values, const RHSType & frhs, LHSType & flhs, const bool is_lowertri) {
 
   typedef typename TriSolveHandle::execution_space execution_space;
   typedef typename TriSolveHandle::size_type size_type;
@@ -1503,6 +1519,19 @@ void tri_solve_partition_dense(TriSolveHandle & thandle, const RowMapType frow_m
   auto row_map = Kokkos::subview(frow_map, Kokkos::pair<size_type,size_type>(persist_sptrimtx_row_start, persist_sptrimtx_row_end+1));
   auto rhs = Kokkos::subview(frhs, Kokkos::pair<size_type,size_type>(persist_sptrimtx_row_start, persist_sptrimtx_row_end));
   auto lhs = Kokkos::subview(flhs, Kokkos::pair<size_type,size_type>(persist_sptrimtx_row_start, persist_sptrimtx_row_end));
+
+
+#ifdef PRINT1DVIEWS
+  print_view1d(frow_map);
+  print_view1d(entries);
+  print_view1d(values);
+  print_view1d(frhs);
+  print_view1d(flhs);
+
+  print_view1d(row_map);
+  print_view1d(rhs);
+  print_view1d(lhs);
+#endif
 
   // Need the offset into entries and vals; for sparse partition want the range [ 0, drow_map(dense_row_start) )
   // FIXME This shouldn't be needed
@@ -1563,6 +1592,7 @@ cudaProfilerStop();
 #else
   size_type dense_nrows = 0;
 #endif
+  std::cout << "DENSE_NROWS = " << dense_nrows << std::endl;
   
   
   for ( size_type chainlink = 0; chainlink < num_chain_entries; ++chainlink ) {
@@ -1574,7 +1604,9 @@ cudaProfilerStop();
     timer_wrap_ifelse.reset();
   #endif
     if ( echain - schain == 1 ) {
-      //std::cout << "Call regular single-link TP - chainlink: " << chainlink << std::endl;
+#ifdef LVL_OUTPUT_INFO
+      std::cout << "Call regular single-link TP - chainlink: " << chainlink << std::endl;
+#endif
       // run normal algm as this is a single level
       // schain should.... map to the level....
       typedef Kokkos::TeamPolicy<execution_space> policy_type;
@@ -1593,7 +1625,7 @@ cudaProfilerStop();
 #if defined(KOKKOS_ENABLE_CUDA) && defined(KOKKOSPSTRSV_SOLVE_IMPL_PROFILE)
 cudaProfilerStart();
 #endif
-        if (is_lower) {
+        if (is_lowertri) {
           // TODO Time changes between merged functor and individuals
           //LowerTriLvlSchedTP1SolverFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, node_count);
           TriLvlSchedTP1SolverFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, true, node_count, dense_nrows);
@@ -1629,7 +1661,9 @@ cudaProfilerStop();
   #endif
     }
     else {
-      //std::cout << "Call multi-link single-block TP - chainlink: " << chainlink << std::endl;
+#ifdef LVL_OUTPUT_INFO
+      std::cout << "Call multi-link single-block TP - chainlink: " << chainlink << std::endl;
+#endif
       // run single_block algm, pass echain and schain as args
         size_type lvl_nodes = 0;
 
@@ -1650,7 +1684,7 @@ cudaProfilerStop();
 #if defined(KOKKOS_ENABLE_CUDA) && defined(KOKKOSPSTRSV_SOLVE_IMPL_PROFILE)
 cudaProfilerStart();
 #endif
-        if (is_lower) {
+        if (is_lowertri) {
           if (cutoff <= team_size) {
             TriLvlSchedTP1SingleBlockFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, nodes_per_level, node_count, schain, echain, true, dense_nrows);
 //          LowerTriLvlSchedTP1SingleBlockFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, nodes_per_level, node_count, schain, echain);
@@ -1802,7 +1836,7 @@ cudaProfilerStop();
         printf ("CUBLAS handle created failed\n");
         return EXIT_FAILURE;
     }
-  cublasFillMode_t uplo = is_lower ? CUBLAS_FILL_MODE_LOWER : CUBLAS_FILL_MODE_UPPER;
+  cublasFillMode_t uplo = is_lowertri ? CUBLAS_FILL_MODE_LOWER : CUBLAS_FILL_MODE_UPPER;
   cublasOperation_t trans = CUBLAS_OP_N;
   cublasDiagType_t diag = CUBLAS_DIAG_NON_UNIT;
   //cublasDiagType_t diag = CUBLAS_DIAG_UNIT;
@@ -1825,7 +1859,7 @@ cudaProfilerStop();
     // Call BLAS routine...
   Kokkos::parallel_for("Call batched_trsv", Kokkos::RangePolicy<Kokkos::DefaultExecutionSpace>(0,1), 
     KOKKOS_LAMBDA( const int i ) {
-        if (is_lower) {
+        if (is_lowertri) {
         KokkosBatched::SerialTrsv<
           KokkosBatched::Uplo::Lower,
           KokkosBatched::Trans::NoTranspose,

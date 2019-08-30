@@ -386,6 +386,7 @@ void upper_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, co
 #ifdef DENSEPARTITION
           signed_integral_t original_col = entries(offset);
           signed_integral_t col = original_col - dense_nrows;
+          //signed_integral_t col = is_lowertri ? original_col : original_col - dense_nrows; //shift required for upper-tri - don't need to check on type of tri mtx since called only in upper impl
 #else
           signed_integral_t col = entries(offset);
 #endif
