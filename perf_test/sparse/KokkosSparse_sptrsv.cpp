@@ -64,7 +64,7 @@
 #include "KokkosSparse_CrsMatrix.hpp"
 #include <KokkosKernels_IOUtils.hpp>
 
-#define PRINTVIEWS
+//#define PRINTVIEWSSPTRSVPERF
 
 #if defined( KOKKOS_ENABLE_CXX11_DISPATCH_LAMBDA ) && (!defined(KOKKOS_ENABLE_CUDA) || ( 8000 <= CUDA_VERSION ))
 using namespace KokkosSparse;
@@ -76,9 +76,11 @@ using namespace KokkosKernels::Experimental;
 
 enum {DEFAULT, CUSPARSE, LVLSCHED_RP, LVLSCHED_TP1, LVLSCHED_TP2, LVLSCHED_TP1CHAIN, LVLSCHED_DENSEP_TP1};
 
-#ifdef PRINTVIEWS
+#ifdef PRINTVIEWSSPTRSVPERF
 template <class ViewType>
-void print_view1d(const ViewType v) {
+void print_view1d(const ViewType dv) {
+  auto v = Kokkos::create_mirror_view(dv);
+  Kokkos::deep_copy(v,dv);
   std::cout << "Output for view " << v.label() << std::endl;
   for (size_t i = 0; i < v.extent(0); ++i) {
     std::cout << "v(" << i << ") = " << v(i) << " , ";
@@ -148,7 +150,7 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
     std::cout << "Lower Perf: lhs.extent(0) = " << lhs.extent(0) << std::endl;
     std::cout << "Lower Perf: rhs.extent(0) = " << rhs.extent(0) << std::endl;
 
-#ifdef PRINTVIEWS
+#ifdef PRINTVIEWSSPTRSVPERF
     print_view1d(row_map);
     print_view1d(entries);
     print_view1d(values);
@@ -425,7 +427,7 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
     std::cout << "Upper Perf: lhs.extent(0) = " << lhs.extent(0) << std::endl;
     std::cout << "Upper Perf: rhs.extent(0) = " << rhs.extent(0) << std::endl;
 
-#ifdef PRINTVIEWS
+#ifdef PRINTVIEWSSPTRSVPERF
     print_view1d(row_map);
     print_view1d(entries);
     print_view1d(values);

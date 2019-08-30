@@ -56,10 +56,10 @@
 #include <KokkosBatched_Trsv_Decl.hpp>
 #include <KokkosBatched_Trsv_Serial_Impl.hpp>
 
-#define LVL_OUTPUT_INFO
-#define CHAIN_DEBUG_OUTPUT
-//#define TRISOLVE_TIMERS
-#define PRINT1DVIEWS
+#define TRISOLVE_TIMERS
+//#define LVL_OUTPUT_INFO
+//#define CHAIN_DEBUG_OUTPUT
+//#define PRINT1DVIEWS
 
 #define KOKKOSPSTRSV_SOLVE_IMPL_PROFILE 1
 #if defined(KOKKOS_ENABLE_CUDA) && defined(KOKKOSPSTRSV_SOLVE_IMPL_PROFILE)
@@ -80,7 +80,7 @@ struct UnsortedTag {};
 
 #ifdef PRINT1DVIEWS
 template <class ViewType>
-void print_view1d(const ViewType dv) {
+void print_view1d_solve(const ViewType dv) {
   auto v = Kokkos::create_mirror_view(dv);
   Kokkos::deep_copy(v, dv);
   std::cout << "Output for view " << v.label() << std::endl;
@@ -1486,9 +1486,6 @@ cudaProfilerStop();
 
 
 
-
-
-
 #ifdef DENSEPARTITION
 template < class TriSolveHandle, class RowMapType, class EntriesType, class ValuesType, class RHSType, class LHSType >
 void tri_solve_partition_dense(TriSolveHandle & thandle, const RowMapType frow_map, const EntriesType entries, const ValuesType values, const RHSType & frhs, LHSType & flhs, const bool is_lowertri) {
@@ -1509,6 +1506,19 @@ void tri_solve_partition_dense(TriSolveHandle & thandle, const RowMapType frow_m
 // Part 1. Sparse partition of the matrix, computation done as in other algorithms, just need to take subviews of the input view arrays
 //  auto dense_row_start = thandle.get_dense_partition_row_start();
 //  auto dense_partition_nrows = thandle.get_dense_partition_nrows() ;
+#ifdef TRISOLVE_TIMERS
+  double time_outer = 0.0, time_full_solves = 0.0, time_chain_solves = 0.0, time_setup = 0.0, time_wrapped_ifelse = 0.0;
+
+  int tp1_ctr = 0, chain_ctr = 0;
+
+  double time_iter = 0.0;
+
+  Kokkos::Timer timer_outer;
+  Kokkos::Timer timer_full_solve;
+  Kokkos::Timer timer_chain_solve;
+  Kokkos::Timer timer_wrap_ifelse;
+  Kokkos::Timer timer_setup;
+#endif
 
   auto persist_sptrimtx_row_start = thandle.get_persist_sptrimtx_row_start();
   auto persist_sptrimtx_nrows = thandle.get_persist_sptrimtx_nrows();
@@ -1522,49 +1532,20 @@ void tri_solve_partition_dense(TriSolveHandle & thandle, const RowMapType frow_m
 
 
 #ifdef PRINT1DVIEWS
-  print_view1d(frow_map);
-  print_view1d(entries);
-  print_view1d(values);
-  print_view1d(frhs);
-  print_view1d(flhs);
+  print_view1d_solve(frow_map);
+  print_view1d_solve(entries);
+  print_view1d_solve(values);
+  print_view1d_solve(frhs);
+  print_view1d_solve(flhs);
 
-  print_view1d(row_map);
-  print_view1d(rhs);
-  print_view1d(lhs);
+  print_view1d_solve(row_map);
+  print_view1d_solve(rhs);
+  print_view1d_solve(lhs);
 #endif
 
-  // Need the offset into entries and vals; for sparse partition want the range [ 0, drow_map(dense_row_start) )
-  // FIXME This shouldn't be needed
-  //auto num_spentries = thandle.get_nnz_persist_sptrimtx();
-  //auto entries = Kokkos::subview(fentries, Kokkos::pair<size_type,size_type>(0, num_spentries));
-  // FIXME This shouldn't be needed
-  //auto values = Kokkos::subview(fvalues, Kokkos::pair<size_type,size_type>(0, num_spentries));
-
-  // lowertri
-  //auto row_map = Kokkos::subview(frow_map, Kokkos::pair<size_type,size_type>(0, dense_row_start+1));
-  //auto rhs = Kokkos::subview(frhs, Kokkos::pair<size_type,size_type>(0, dense_row_start));
-  //auto lhs = Kokkos::subview(flhs, Kokkos::pair<size_type,size_type>(0, dense_row_start));
-
-  // upper versions:
-  //auto row_map = Kokkos::subview(frow_map, Kokkos::pair<size_type,size_type>(dense_row_start,frow_map.extent(0)));
-  //auto rhs = Kokkos::subview(frhs, Kokkos::pair<size_type,size_type>(dense_row_start, frhs.extent(0)));
-  //auto lhs = Kokkos::subview(flhs, Kokkos::pair<size_type,size_type>(dense_row_start, flhs.extent(0)));
 
 #if defined(KOKKOS_ENABLE_CUDA) && defined(KOKKOSPSTRSV_SOLVE_IMPL_PROFILE)
 cudaProfilerStop();
-#endif
-#ifdef TRISOLVE_TIMERS
-  double time_outer = 0.0, time_full_solves = 0.0, time_chain_solves = 0.0, time_setup = 0.0, time_wrapped_ifelse = 0.0;
-
-  int tp1_ctr = 0, chain_ctr = 0;
-
-  double time_iter = 0.0;
-
-  Kokkos::Timer timer_outer;
-  Kokkos::Timer timer_full_solve;
-  Kokkos::Timer timer_chain_solve;
-  Kokkos::Timer timer_wrap_ifelse;
-  Kokkos::Timer timer_setup;
 #endif
   // Algorithm is checked before this function is called
   auto h_chain_ptr = thandle.get_host_chain_ptr();
@@ -1592,7 +1573,6 @@ cudaProfilerStop();
 #else
   size_type dense_nrows = 0;
 #endif
-  std::cout << "DENSE_NROWS = " << dense_nrows << std::endl;
   
   
   for ( size_type chainlink = 0; chainlink < num_chain_entries; ++chainlink ) {
@@ -1738,28 +1718,11 @@ cudaProfilerStop();
      time_wrapped_ifelse += timer_wrap_ifelse.seconds();
   #endif
   } // end for chainlink
-#ifdef TRISOLVE_TIMERS
-  // Total chain time
-  time_outer = timer_outer.seconds(); 
 
-  std::cout << "********************************" << std::endl; 
-  std::cout << "  tri_solve_chain: setup = " << time_setup << std::endl;
-  std::cout << "  tri_solve_chain: total loop = " << time_outer << std::endl;
-  std::cout << "  tri_solve_chain: full lvl solves = " << time_full_solves << std::endl;
-  std::cout << "      solve count = " << tp1_ctr << std::endl;
-  std::cout << "  tri_solve_chain: chain solves = " << time_chain_solves << std::endl;
-  std::cout << "      single-block solve count = " << chain_ctr << std::endl;
-  std::cout << "  tri_solve_chain: total if-else solve times = " << time_wrapped_ifelse << std::endl;
-  std::cout << "********************************" << std::endl; 
-#endif
-
+#ifdef PRINT1DVIEWS
   std::cout << "Output sptrimtx solution" << std::endl;
-  auto hlhs = Kokkos::create_mirror_view(lhs);
-  Kokkos::deep_copy(hlhs, lhs);
-  for (size_t i = 0; i < hlhs.extent(0); ++i) {
-    std::cout << "  hlhs(" << i << ") = " << hlhs(i) << std::endl;
-  }
-
+  print_view1d_solve(lhs);
+#endif
 
 // Part 2. gemv, set xp <- bp - Mp*xknown
 //                 lhsp <- rhsp - Mp*lhs  lhs the subview from part 1.
@@ -1772,6 +1735,11 @@ cudaProfilerStop();
   //Create KokkosSparse::CrsMatrix from modified row_map, entries, and values
   // This may require "shifting" the modified row_map, subview the entries and values and shift the entries array by subtracting out colid shift
   // lowertri
+
+  #ifdef TRISOLVE_TIMERS
+  double time_rectspmtx_total = 0.0, time_spmv = 0.0;
+  Kokkos::Timer timer_rectspmtx;
+  #endif
 
   auto row_map_rectspmtx = thandle.get_row_map_rectspmtx();
   auto entries_rectspmtx = thandle.get_entries_rectspmtx();
@@ -1792,25 +1760,30 @@ cudaProfilerStop();
   auto rhsp = Kokkos::subview(frhs, Kokkos::pair<size_type, size_type>(rectspmtx_row_start, rectspmtx_row_start + rectspmtx_nrows)); 
   Kokkos::deep_copy(lhsp, rhsp);
 
+#ifdef PRINT1DVIEWS
   std::cout << "Pre spmv rhsp" << std::endl;
-  auto hrhsp = Kokkos::create_mirror_view(rhsp);
-  Kokkos::deep_copy(hrhsp, rhsp);
-  for (size_t i = 0; i < hrhsp.extent(0); ++i) {
-    std::cout << "  hrhsp(" << i << ") = " << hrhsp(i) << std::endl;
-  }
+  print_view1d_solve(rhsp);
+#endif
 
   KokkosSparse::CrsMatrix<crs_scalar_t, crs_lno_t, crs_exec_space, void, crs_size_type> crs_rectspmtx("rect_spmtx", rectspmtx_nrows, rectspmtx_ncols, rectspmtx_nnz, values_rectspmtx, row_map_rectspmtx, entries_rectspmtx);  
+
+  #ifdef TRISOLVE_TIMERS
+  time_rectspmtx_total += timer_rectspmtx.seconds();
+  timer_rectspmtx.reset();
+  #endif
   // lhsp <- 1.0*lhsp + -1.0*crs_rectspmtx*lhs
   // y <- beta*y + alpha*A*x
   // spmv("trans", alpha, A, x, beta, y)
   KokkosSparse::spmv("N", -1.0, crs_rectspmtx, lhs, 1.0, lhsp); //(where rhsp i.e. b was copied into lhsp, and lhs is the solution from part 1)
 
+  #ifdef TRISOLVE_TIMERS
+  time_spmv += timer_rectspmtx.seconds();
+  #endif
+
+#ifdef PRINT1DVIEWS
   std::cout << "Post-spmv intermediate lhsp" << std::endl;
-  auto hlhsp = Kokkos::create_mirror_view(lhsp);
-  Kokkos::deep_copy(hlhsp, lhsp);
-  for (size_t i = 0; i < hlhsp.extent(0); ++i) {
-    std::cout << "  hlhsp(" << i << ") = " << hlhsp(i) << std::endl;
-  }
+  print_view1d_solve(lhsp);
+#endif
   // TODO Is this necessary???
   Kokkos::fence();
 
@@ -1824,6 +1797,10 @@ cudaProfilerStop();
 //cublasStatus_t cublasDtrsv(cublasHandle_t handle, cublasFillMode_t uplo,
 //                           cublasOperation_t trans, cublasDiagType_t diag, int n, const double *A, int lda, double *x, int incx)
 
+  #ifdef TRISOLVE_TIMERS
+  double time_densetri = 0.0;
+  Kokkos::Timer timer_densetri;
+  #endif
   // beginnings of the call...
   // Need guards for Cuda being enabled AND active, etc
 #if defined(KOKKOS_ENABLED_CUDA)
@@ -1877,13 +1854,33 @@ cudaProfilerStop();
       }
     });
 #endif
-  std::cout << "Output dense partition solution" << std::endl;
-  //auto hlhsp = Kokkos::create_mirror_view(lhsp);
-  Kokkos::deep_copy(hlhsp, lhsp);
-  for (size_t i = 0; i < hlhsp.extent(0); ++i) {
-    std::cout << "  hlhsp(" << i << ") = " << hlhsp(i) << std::endl;
-  }
+  #ifdef TRISOLVE_TIMERS
+  time_densetri += timer_densetri.seconds();
+  #endif
 
+#ifdef PRINT1DVIEWS
+  std::cout << "Output dense partition solution" << std::endl;
+  print_view1d_solve(lhsp);
+#endif
+
+#ifdef TRISOLVE_TIMERS
+  // Total chain time
+  time_outer = timer_outer.seconds(); 
+
+  std::cout << "********************************" << std::endl; 
+  std::cout << "  tri_solve_chain: setup = " << time_setup << std::endl;
+  std::cout << "  tri_solve_chain: total loop = " << time_outer << std::endl;
+  std::cout << "  tri_solve_chain: full lvl solves = " << time_full_solves << std::endl;
+  std::cout << "      solve count = " << tp1_ctr << std::endl;
+  std::cout << "  tri_solve_chain: chain solves = " << time_chain_solves << std::endl;
+  std::cout << "      single-block solve count = " << chain_ctr << std::endl;
+  std::cout << "  tri_solve_chain: total if-else solve times = " << time_wrapped_ifelse << std::endl;
+
+  std::cout << "  tri_solve_partition: spmv setup = " << time_rectspmtx_total << std::endl;
+  std::cout << "  tri_solve_partition: spmv time = " << time_spmv << std::endl;
+  std::cout << "  tri_solve_partition: dense_tri time = " << time_densetri << std::endl;
+  std::cout << "********************************" << std::endl; 
+#endif
 
 } // end tri_solve_partition_dense
 #endif
