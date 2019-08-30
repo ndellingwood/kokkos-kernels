@@ -180,7 +180,8 @@ private:
   // Symbolic and Numeric: Dense-block data structures
 #ifdef DENSEPARTITION
   // TENTATIVE NAMING CONVENTIONS:
-  //   persist_spmtx - the sparse tri matrix component remaining after partitioning
+  //   persist_sptrimtx - the sparse tri matrix component remaining after partitioning
+  //   rectspmtx - the sparse tri matrix component remaining after partitioning
   //   dense_partition* - refers to the partition with the sparse rect mtx and the dense triangular matrix after partitioning
   //
   // ASSUMPTIONS:
@@ -201,17 +202,17 @@ private:
   // nnz for persisting sparse matrix after partition, equivalent to row_map(dense_partition_row_start); also provides offset into start of entries for the "dense" partition
   size_type nnz_persist_sptrimtx;
 
- //FIXME Remove this, replace with view-types for subviews
-  mtx_scalar_view_t dense_matrix_partition;
+  size_type nnz_rectspmtx;
 
-  mtx_scalar_view_t dense_trimtx_partition; // 2D rectangular storage is inefficient for this matrix, but fits cuBLAS pattern...
+
+  mtx_scalar_view_t dense_trimtx; // 2D rectangular storage is inefficient for this matrix, but fits cuBLAS pattern...
 
   // needed for the rectspmtx partition to work properly with spmv routines
-  nnz_row_view_t row_map_rectspmtx_partition;
+  nnz_row_view_t row_map_rectspmtx;
 
-  nnz_lno_view_t entries_rectspmtx_partition;
+  nnz_lno_view_t entries_rectspmtx;
 
-  nnz_scalar_view_t values_rectspmtx_partition;
+  nnz_scalar_view_t values_rectspmtx;
 
   //mtx_scalar_view_t dense_trimtx_inv_partition; // 2D storage is inefficient for this matrix, but fits cuBLAS pattern...
 
@@ -221,6 +222,7 @@ private:
   //nnz_scalar_view_t sparse_bvector_partition; // Make this a subview of the original view - TODO Unneccessary to add here, just create subview before fcn call?
 
   bool require_symbolic_numeric_dense_phase;
+
   bool numeric_complete;
 
   void set_if_algm_require_dense_partition() {
@@ -231,10 +233,6 @@ private:
       require_symbolic_numeric_dense_phase = false;
     }
   }
-
-  // FIXME - this only works for lower tri right now
-  KOKKOS_INLINE_FUNCTION
-  size_type get_persist_sptrimtx_nrows() { return require_symbolic_numeric_dense_phase ? (nrows - dense_partition_nrows) : nrows; }
 
 #endif
 
@@ -266,11 +264,11 @@ public:
     auto_set_dense_partition_percent(true),
     dense_partition_row_percent(0.0),
     nnz_persist_sptrimtx(0),
-    dense_matrix_partition(), //FIXME Remove this, replace with view-types for subviews
-    dense_trimtx_partition(),
-    row_map_rectspmtx_partition(),
-    entries_rectspmtx_partition(),
-    values_rectspmtx_partition(),
+    nnz_rectspmtx(0),
+    dense_trimtx(),
+    row_map_rectspmtx(),
+    entries_rectspmtx(),
+    values_rectspmtx(),
     require_symbolic_numeric_dense_phase(false),
     numeric_complete(false)
 #endif
@@ -342,18 +340,18 @@ public:
 
     // Assumed that level scheduling occurs during symbolic phase for all algorithms, for now
 #ifdef DENSEPARTITION
-    // FIXME This algorithm still uses lvl scheduling, but nrows refers to the full matrix, and we now need the lvl scheduling to use num rows of the sparse partition
     if ( this->require_symbolic_numeric_dense_phase == true ) {
+      // This will set the dense_partition_nrows and dense_partition_row_start
+      // From here, row start and nrows is known for each component - persist_sptrimtx, rect_spmtx, dense_trimtx
       std::cout << "  init_handle: dense allocs" << std::endl;
-
-      std::cout << "    auto set dense start: " << auto_set_dense_partition_percent << std::endl;
 
       if (auto_set_dense_partition_percent == true) {
         // The row start will depend on whether matrix is upper vs lower tri
         dense_partition_nrows = 0.01*nrows;
-        std::cout << "  Assume 1% dense_partition_nrows = " << dense_partition_nrows << std::endl;
+        std::cout << "  At handle init assume 1% dense_partition_nrows = " << dense_partition_nrows << std::endl;
       }
       else {
+        // FIXME: The interface doesn't allow this to happen since the handle must be constructed before the percent can be set
         dense_partition_nrows = dense_partition_row_percent*nrows;
         std::cout << "  User provided dense_partition_nrows = " << dense_partition_nrows << std::endl;
       }
@@ -366,19 +364,11 @@ public:
        // Upper
        // [dense_partition_row_start, nrows) sparse;  [0, dense_partition_nrows) dense, but map to [0,nrows-dense_partition_row_start)
 
-      // FIXME KEEP THIS SPARSE!!! Too large, why did I create dense?
-      //dense_matrix_partition = mtx_scalar_view_t("dense_mtx",  dense_partition_nrows, dense_partition_row_start); //FIXME Remove this, replace with view-types for subview
-
-      // FIXME MOVE ALLOCATIONS TO SYMBOLIC!!!!!!!!!!
-//      dense_trimtx_partition = mtx_scalar_view_t("dense_tri_mtx", dense_partition_nrows, dense_partition_nrows);
-      //row_map_rectspmtx_partition = nnz_row_view_t("row_map_rectspmtx_partition", "rectsprows"+1);
-      //dense_trimtx_inv_partition = mtx_scalar_view_t ; // 2D storage is inefficient for this matrix, but fits cuBLAS pattern...
-
 
       numeric_complete = false;
     }
     else {
-      dense_trimtx_partition = mtx_scalar_view_t();
+      dense_trimtx= mtx_scalar_view_t();
       numeric_complete = false;
     }
 #endif
@@ -566,23 +556,71 @@ public:
 #ifdef DENSEPARTITION
   // TODO FIXME May need to add a create_set routine, first will try allocating and initializing within symbolic
   KOKKOS_INLINE_FUNCTION
-  nnz_row_view_t get_row_map_rectspmtx_partition() { return row_map_rectspmtx_partition; }
+  nnz_row_view_t get_row_map_rectspmtx() { return row_map_rectspmtx; }
 
   KOKKOS_INLINE_FUNCTION
-  nnz_lno_view_t get_entries_rectspmtx_partition() { return entries_rectspmtx_partition; }
+  nnz_lno_view_t get_entries_rectspmtx() { return entries_rectspmtx; }
 
   KOKKOS_INLINE_FUNCTION
-  nnz_scalar_view_t get_values_rectspmtx_partition() { return values_rectspmtx_partition; }
+  nnz_scalar_view_t get_values_rectspmtx() { return values_rectspmtx; }
+
 
   inline
   void set_dense_partition_row_percent(const float rp) { 
-    dense_partition_row_percent = rp;
-    std::cout << "    manual set dense_partition_row_percent = " << dense_partition_row_percent << std::endl;
-    auto_set_dense_partition_percent = false;
+    if (numeric_complete == false && symbolic_complete == false) {
+      dense_partition_row_percent = rp;
+      std::cout << "    manual set dense_partition_row_percent = " << dense_partition_row_percent << std::endl;
+      auto_set_dense_partition_percent = false;
+      dense_partition_nrows = dense_partition_row_percent*nrows;
+      std::cout << "  nrows = " << nrows << std::endl;
+      std::cout << "  User resultant dense_partition_nrows = " << dense_partition_nrows << std::endl;
+      dense_partition_row_start = lower_tri ? (nrows - dense_partition_nrows) : 0;
+      std::cout << "  User resultant dense_row_start = " << dense_partition_row_start << std::endl;
+    }
+    else {
+      std::cout << "  dprs can not be set after symbolic and numeric phase, request ignored - destroy and create a new handle to do this for now." << std::endl;
+    }
   }
 
   KOKKOS_INLINE_FUNCTION
   size_type get_dense_partition_row_start() const { return dense_partition_row_start; }
+
+  KOKKOS_INLINE_FUNCTION
+  size_type get_dense_partition_nrows() const { return dense_partition_nrows; }
+
+
+  KOKKOS_INLINE_FUNCTION
+  size_type get_rectspmtx_row_start() const { return dense_partition_row_start; }
+
+  KOKKOS_INLINE_FUNCTION
+  size_type get_rectspmtx_nrows() const { return dense_partition_nrows; }
+
+  KOKKOS_INLINE_FUNCTION
+  size_type get_rectspmtx_ncols() const { return (nrows - dense_partition_nrows); }
+
+  KOKKOS_INLINE_FUNCTION
+  size_type get_nnz_rectspmtx() const { return nnz_rectspmtx; }
+
+  inline
+  void set_nnz_rectspmtx(const size_type snnz) { nnz_rectspmtx = snnz; }
+
+
+  //KOKKOS_INLINE_FUNCTION
+  //size_type get_persist_sptrimtx_row_start() const { return lower_tri ? 0 : dense_partition_nrows; }
+
+  KOKKOS_INLINE_FUNCTION
+  size_type get_persist_sptrimtx_row_start() const { return lower_tri ? size_type(0) : dense_partition_nrows; }
+
+  KOKKOS_INLINE_FUNCTION
+  size_type get_persist_sptrimtx_nrows() const { return require_symbolic_numeric_dense_phase ? (nrows - dense_partition_nrows) : nrows; }
+
+  // Needed for the solve phase
+  KOKKOS_INLINE_FUNCTION
+  size_type get_nnz_persist_sptrimtx() const { return nnz_persist_sptrimtx; }
+
+  // Set in symbolic...
+  inline
+  void set_nnz_persist_sptrimtx(const size_type snnz) { nnz_persist_sptrimtx = snnz; }
 
 
   // TODO This is determined by upper vs lower tri and percent of dense rows - handle input params; this should not change unless matrix is changed, requiring reset of the handle
@@ -594,8 +632,6 @@ public:
   }
 */
 
-  KOKKOS_INLINE_FUNCTION
-  size_type get_dense_partition_nrows() const { return dense_partition_nrows; }
 /*
   // TODO Have this set internally based on inputs, not mutable by user
   inline
@@ -606,14 +642,14 @@ public:
   }
 */
 
+
+
   KOKKOS_INLINE_FUNCTION
-  size_type get_persist_sptrimtx_row_start() const { return lower_tri ? size_type(0) : dense_partition_nrows; }
+  mtx_scalar_view_t get_dense_trimtx() { return dense_trimtx; }
 
 
-  // Needed for the solve phase
-  KOKKOS_INLINE_FUNCTION
-  size_type get_nnz_persist_spmtx() const { return nnz_persist_sptrimtx; }
-
+// FIXME Unused - remove, if they turn out to be incorrect/unnecessary
+/*
   // For a single "dense" block, the nnz for the persisting sparse partition is also the offset into the start of the dense entries (indices) when using the original entries array
   // TODO If recursion or multiple dense "stripes" are allowed, then this routine will no longer hold and will need to return value from an array storing the offset start per stripe
   KOKKOS_INLINE_FUNCTION
@@ -623,17 +659,7 @@ public:
   // This may no longer be necessary...
   inline
   void set_dense_entries_start_offset(const size_type snnz) { nnz_persist_sptrimtx = snnz; }
-
-  // Set in symbolic...
-  inline
-  void set_nnz_persist_sptrimtx(const size_type snnz) { nnz_persist_sptrimtx = snnz; }
-
-  // FIXME Remove
-  KOKKOS_INLINE_FUNCTION
-  mtx_scalar_view_t get_dense_mtx_partition() const { return dense_matrix_partition; } // FIXME Need to remove and replace with subview components in sparse components
-
-  KOKKOS_INLINE_FUNCTION
-  mtx_scalar_view_t get_dense_trimtx_partition() { return dense_trimtx_partition; }
+*/
 
 
 

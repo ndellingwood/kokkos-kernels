@@ -463,23 +463,28 @@ void symbolic_dense_partition_algm( TriSolveHandle &thandle, const RowMapType dr
 
 
   // shifted rectspmtx row_map allocation
-  auto row_map_rectspmtx = thandle.get_row_map_rectspmtx_partition();
+  auto row_map_rectspmtx = thandle.get_row_map_rectspmtx();
   auto dense_partition_nrows = thandle.get_dense_partition_nrows() ;
 
   // TODO Will the reference count help this allocation to persist beyond this function call?
-  row_map_rectspmtx = typename TriSolveHandle::nnz_row_view_t("row_map_rectspmtx_partition", dense_partition_nrows+1);
+  row_map_rectspmtx = typename TriSolveHandle::nnz_row_view_t("row_map_rectspmtx", dense_partition_nrows+1);
+  std::cout << "  row_map_rectspmtx allocated? extent(0) = " << row_map_rectspmtx.extent(0) << std::endl;
+  std::cout << "  row_map_rectspmtx.data() = " << row_map_rectspmtx.data() << std::endl;
 
 
   typedef Kokkos::View<size_type, typename RowMapType::memory_space> ShiftedEntriesStart;
 
   auto dense_row_start = thandle.get_dense_partition_row_start();
 
-  std::cout << "  Begin numeric" << std::endl;
+  std::cout << "\n\n  Begin symbolic dense partition" << std::endl;
   std::cout << "  dense_row_start = " << dense_row_start << std::endl;
+  std::cout << "  dense_nrows = " << dense_partition_nrows << std::endl;
 
   ShiftedEntriesStart shifted_entries_start(Kokkos::ViewAllocateWithoutInitializing("ses"));
 
   auto dprow_map = Kokkos::subview( drow_map, Kokkos::pair<size_type,size_type>(dense_row_start, dense_row_start+dense_partition_nrows+1) );
+  std::cout << "  dprow_map allocated? extent(0) = " << dprow_map.extent(0) << std::endl;
+  std::cout << "  dprow_map.data() = " << dprow_map.data() << std::endl;
 /*
   Kokkos::parallel_for("shifted_dense_row_map_init", Kokkos::RangePolicy<Kokkos::DefaultExecutionSpace>(0, row_map_rectspmtx.extent(0)),
     KOKKOS_LAMBDA (const size_type i) {
@@ -511,6 +516,10 @@ void symbolic_dense_partition_algm( TriSolveHandle &thandle, const RowMapType dr
     trimtx_col_start = 0; // ends at rectspmtx_col_start
   }
 
+  std::cout << "  is_lower_tri = " << is_lower_tri << std::endl;
+  std::cout << "  rectspmtx_col_start = " << rectspmtx_col_start << std::endl;
+  std::cout << "  trimtx_col_start = " << trimtx_col_start << std::endl;
+
   // reshape CRS
   // dprow_map has proper offsets into dentries and dvalues
 /*
@@ -533,9 +542,10 @@ void symbolic_dense_partition_algm( TriSolveHandle &thandle, const RowMapType dr
     KOKKOS_LAMBDA (const size_type i) {
       size_type offset_start = dprow_map(i);
       size_type offset_end   = dprow_map(i+1);
+      printf("offset_start = %d  offset_end = %d\n", offset_start, offset_end);
       for (size_type offset = offset_start; offset < offset_end; ++offset) {
         size_type colid = dentries(offset);
-        // Remove out-of-sparse-rect indices
+        printf("i = %d  colid = %d  is_lower_tri = %d\n",i, colid, (int)is_lower_tri);
         // Count in-sparse-rect entries per row, store at row_map(rowid+1) in anticipation of followup scan
         if ( (is_lower_tri && colid < trimtx_col_start) || (!is_lower_tri && colid >= rectspmtx_col_start) ) {
           // increment row_map_rectspmtx(i+1)
@@ -543,22 +553,41 @@ void symbolic_dense_partition_algm( TriSolveHandle &thandle, const RowMapType dr
         }
       }
     });
+  Kokkos::fence();
+  auto hrmrect = Kokkos::create_mirror_view(row_map_rectspmtx);
+  Kokkos::deep_copy(hrmrect, row_map_rectspmtx);
+  for (size_t i = 0; i < hrmrect.extent(0); ++i) {
+    std::cout << "  freq hrmrect(" << i << ") = " << hrmrect(i) << std::endl;
+  }
 
   // Convert count of indices in rectspmtx to a row_map
   size_type rectspmtx_nnz = 0; // this is needed for allocating rectspmtx entries and values arrays
   Kokkos::parallel_scan("row_map_rectspmtx scan", Kokkos::RangePolicy<Kokkos::DefaultExecutionSpace>(0, row_map_rectspmtx.extent(0)),
-    KOKKOS_LAMBDA (const size_type i, scalar_t& update, const bool& final) {
+    KOKKOS_LAMBDA (const size_type i, size_type& update, const bool& final) {
       update += row_map_rectspmtx(i);
       if (final) {
         row_map_rectspmtx(i) = update;
       }
     }, rectspmtx_nnz);
+  Kokkos::fence();
+  Kokkos::deep_copy(hrmrect, row_map_rectspmtx);
+  for (size_t i = 0; i < hrmrect.extent(0); ++i) {
+    std::cout << "  hrmrect(" << i << ") = " << hrmrect(i) << std::endl;
+  }
 
-  auto entries_rectspmtx_partition = thandle.get_entries_rectspmtx_partition(); 
-  entries_rectspmtx_partition = typename TriSolveHandle::nnz_lno_view_t("entries_rectspmtx_partition", rectspmtx_nnz);
+  thandle.set_nnz_rectspmtx(rectspmtx_nnz);
 
-  auto values_rectspmtx_partition = thandle.get_values_rectspmtx_partition();
-  values_rectspmtx_partition = typename TriSolveHandle::nnz_scalar_view_t("values_rectspmtx_partition", rectspmtx_nnz);
+  std::cout << "  rectspmtx_nnz = " << rectspmtx_nnz << std::endl;
+
+  auto entries_rectspmtx= thandle.get_entries_rectspmtx(); 
+  entries_rectspmtx= typename TriSolveHandle::nnz_lno_view_t("entries_rectspmtx", rectspmtx_nnz);
+  std::cout << "  entries_rectspmtx allocated? extent(0) = " << entries_rectspmtx.extent(0) << std::endl;
+  std::cout << "  entries_rectspmtx.data() = " << entries_rectspmtx.data() << std::endl;
+
+  auto values_rectspmtx= thandle.get_values_rectspmtx();
+  values_rectspmtx= typename TriSolveHandle::nnz_scalar_view_t("values_rectspmtx", rectspmtx_nnz);
+  std::cout << "  values_rectspmtx allocated? extent(0) = " << values_rectspmtx.extent(0) << std::endl;
+  std::cout << "  values_rectspmtx.data() = " << values_rectspmtx.data() << std::endl;
 
   // create rectspmtx entries array
   Kokkos::parallel_for("entries_rectspmtx init", Kokkos::RangePolicy<Kokkos::DefaultExecutionSpace>(0, dense_partition_nrows),
@@ -577,7 +606,7 @@ void symbolic_dense_partition_algm( TriSolveHandle &thandle, const RowMapType dr
         if ( (is_lower_tri && colid < trimtx_col_start) || (!is_lower_tri && colid >= rectspmtx_col_start) ) {
           // increment row_map_rectspmtx(i+1)
           //++row_map_rectspmtx(i+1);
-          entries_rectspmtx_partition(new_idx_offset) = colid;
+          entries_rectspmtx(new_idx_offset) = colid;
           ++new_idx_offset;
         }
       }
@@ -585,8 +614,10 @@ void symbolic_dense_partition_algm( TriSolveHandle &thandle, const RowMapType dr
     });
   
   // alloc dense tri mtx
-  auto dense_trimtx_partition = thandle.get_dense_trimtx_partition();
-  dense_trimtx_partition = typename TriSolveHandle::mtx_scalar_view_t("dense_tri_mtx", dense_partition_nrows, dense_partition_nrows);
+  auto dense_trimtx= thandle.get_dense_trimtx();
+  dense_trimtx= typename TriSolveHandle::mtx_scalar_view_t("dense_tri_mtx", dense_partition_nrows, dense_partition_nrows);
+  std::cout << "  dense_trimtx allocated? extent(0) = " << dense_trimtx.extent(0) << "  extent(1) = " << dense_trimtx.extent(1) << std::endl;
+  std::cout << "  dense_trimtx.data() = " << dense_trimtx.data() << std::endl;
 
 #if 0
   // FIXME BELOW IS OLD STUFF, may have useful indexing to not have to rethink but will delete soon...
@@ -659,6 +690,7 @@ void numeric_dense_partition_algm(TriSolveHandle &thandle, const RowMapType drow
 
   typedef typename TriSolveHandle::size_type size_type;
 
+  std::cout << "\n\n  Begin numeric" << std::endl;
   auto dense_partition_nrows = thandle.get_dense_partition_nrows() ;
   auto dense_row_start = thandle.get_dense_partition_row_start();
 
@@ -668,7 +700,10 @@ void numeric_dense_partition_algm(TriSolveHandle &thandle, const RowMapType drow
   size_type rectspmtx_col_start;
   size_type trimtx_col_start;
 
-  auto row_map_rectspmtx = thandle.get_row_map_rectspmtx_partition();
+  auto row_map_rectspmtx = thandle.get_row_map_rectspmtx();
+  // Broken here - row_map_rectspmtx in symbolic did not persist...
+  std::cout << "  row_map_rectspmtx allocated? extent(0) = " << row_map_rectspmtx.extent(0) << std::endl;
+  std::cout << "  row_map_rectspmtx.data() = " << row_map_rectspmtx.data() << std::endl;
 
   bool is_lower_tri = thandle.is_lower_tri();
 
@@ -681,11 +716,16 @@ void numeric_dense_partition_algm(TriSolveHandle &thandle, const RowMapType drow
     trimtx_col_start = 0; // ends at rectspmtx_col_start
   }
 
+  std::cout << "  is_lower_tri = " << is_lower_tri << std::endl;
+  std::cout << "  rectspmtx_col_start = " << rectspmtx_col_start << std::endl;
+  std::cout << "  trimtx_col_start = " << trimtx_col_start << std::endl;
 
 
-  auto dense_trimtx_partition = thandle.get_dense_trimtx_partition();
+  auto dense_trimtx= thandle.get_dense_trimtx();
 
-  auto values_rectspmtx_partition = thandle.get_values_rectspmtx_partition();
+  auto values_rectspmtx= thandle.get_values_rectspmtx();
+  std::cout << "  values_rectspmtx allocated? extent(0) = " << values_rectspmtx.extent(0) << std::endl;
+  std::cout << "  values_rectspmtx.data() = " << values_rectspmtx.data() << std::endl;
 
   // fill rectspmtx values array and dense trimtx
   Kokkos::parallel_for("numeric values fill init", Kokkos::RangePolicy<Kokkos::DefaultExecutionSpace>(0, dense_partition_nrows),
@@ -704,12 +744,12 @@ void numeric_dense_partition_algm(TriSolveHandle &thandle, const RowMapType drow
         if ( (is_lower_tri && colid < trimtx_col_start) || (!is_lower_tri && colid >= rectspmtx_col_start) ) {
           // increment row_map_rectspmtx(i+1)
           //++row_map_rectspmtx(i+1);
-          values_rectspmtx_partition(new_idx_offset) = val;
+          values_rectspmtx(new_idx_offset) = val;
           ++new_idx_offset;
         }
         else {
           auto trimtx_shifted_colid = is_lower_tri ? colid - trimtx_col_start : colid;
-          dense_trimtx_partition(i, trimtx_shifted_colid) = val;
+          dense_trimtx(i, trimtx_shifted_colid) = val;
         }
       }
 
@@ -813,7 +853,7 @@ void numeric_dense_partition_algm(TriSolveHandle &thandle, const RowMapType drow
 
   // Fill the dense_mtx
   auto dense_mtx = thandle.get_dense_mtx_partition();
-  auto dense_tri = thandle.get_dense_trimtx_partition();
+  auto dense_tri = thandle.get_dense_trimtx();
 
   // TODO If resetting the matrix values, but structure the same, need to re-zero the dense matrices
   // TODO Zero the matrices here, and alloc without initializing in handle (or symbolic)?

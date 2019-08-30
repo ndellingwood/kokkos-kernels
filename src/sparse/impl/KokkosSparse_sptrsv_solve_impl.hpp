@@ -51,6 +51,7 @@
 #include <Kokkos_ArithTraits.hpp>
 #include <KokkosSparse_sptrsv_handle.hpp>
 #include <KokkosSparse_spmv.hpp>
+#include <KokkosSparse_CrsMatrix.hpp>
 
 //#define LVL_OUTPUT_INFO
 //#define CHAIN_DEBUG_OUTPUT
@@ -1455,21 +1456,28 @@ void tri_solve_partition_dense(TriSolveHandle & thandle, const RowMapType frow_m
 
 // Part 1. Sparse partition of the matrix, computation done as in other algorithms, just need to take subviews of the input view arrays
   auto dense_row_start = thandle.get_dense_partition_row_start();
-  //auto dense_partition_nrows = thandle.get_dense_partition_nrows() ;
+  auto dense_partition_nrows = thandle.get_dense_partition_nrows() ;
 
-  //auto persist_sptrimtx_nrows = thandle.get_persist_sptrimtx_nrows();
+  auto persist_sptrimtx_row_start = thandle.get_persist_sptrimtx_row_start();
+  auto persist_sptrimtx_nrows = thandle.get_persist_sptrimtx_nrows();
+  auto persist_sptrimtx_row_end = persist_sptrimtx_row_start + persist_sptrimtx_nrows;
 
 
-  auto row_map = Kokkos::subview(frow_map, Kokkos::pair<size_type,size_type>(0, dense_row_start+1));
+  auto row_map = Kokkos::subview(frow_map, Kokkos::pair<size_type,size_type>(persist_sptrimtx_row_start, persist_sptrimtx_row_end+1));
+  auto rhs = Kokkos::subview(frhs, Kokkos::pair<size_type,size_type>(persist_sptrimtx_row_start, persist_sptrimtx_row_end));
+  auto lhs = Kokkos::subview(flhs, Kokkos::pair<size_type,size_type>(persist_sptrimtx_row_start, persist_sptrimtx_row_end));
+
   // Need the offset into entries and vals; for sparse partition want the range [ 0, drow_map(dense_row_start) )
   // FIXME This shouldn't be needed
-  //auto num_spentries = thandle.get_nnz_persist_spmtx();
+  //auto num_spentries = thandle.get_nnz_persist_sptrimtx();
   //auto entries = Kokkos::subview(fentries, Kokkos::pair<size_type,size_type>(0, num_spentries));
   // FIXME This shouldn't be needed
   //auto values = Kokkos::subview(fvalues, Kokkos::pair<size_type,size_type>(0, num_spentries));
 
-  auto rhs = Kokkos::subview(frhs, Kokkos::pair<size_type,size_type>(0, dense_row_start));
-  auto lhs = Kokkos::subview(flhs, Kokkos::pair<size_type,size_type>(0, dense_row_start));
+  // lowertri
+  //auto row_map = Kokkos::subview(frow_map, Kokkos::pair<size_type,size_type>(0, dense_row_start+1));
+  //auto rhs = Kokkos::subview(frhs, Kokkos::pair<size_type,size_type>(0, dense_row_start));
+  //auto lhs = Kokkos::subview(flhs, Kokkos::pair<size_type,size_type>(0, dense_row_start));
 
   // upper versions:
   //auto row_map = Kokkos::subview(frow_map, Kokkos::pair<size_type,size_type>(dense_row_start,frow_map.extent(0)));
@@ -1674,23 +1682,42 @@ cudaProfilerStop();
 //           2. gemv("N", -1.0, dense_mtx, lhs, 1.0, lhsp); (where rhsp i.e. b was copied into lhsp, and lhs is the solution from part 1)
 //           3. Kokkos::fence(); ?
   //auto dense_mtx = thandle.get_dense_mtx_partition(); // FIXME Need to remove and replace with subview components in sparse components
-  auto dense_tri = thandle.get_dense_trimtx_partition();
 
-  // lower tri
-  auto lhsp = Kokkos::subview(flhs, Kokkos::pair<size_type, size_type>(dense_row_start, flhs.extent(0))); 
-  auto rhsp = Kokkos::subview(frhs, Kokkos::pair<size_type, size_type>(dense_row_start, frhs.extent(0))); 
-  // upper tri - FIXME This must happen at the start of the solve
-  //auto lhsp = Kokkos::subview(flhs, Kokkos::pair<size_type, size_type>(0,dense_row_start)); 
-  //auto rhsp = Kokkos::subview(frhs, Kokkos::pair<size_type, size_type>(0,dense_row_start)); 
-  Kokkos::deep_copy(lhsp, rhsp);
-
-  //auto row_map_rectspmtx = thandle.get_row_map_rectspmtx_partition();
   //Create KokkosSparse::CrsMatrix from modified row_map, entries, and values
   // This may require "shifting" the modified row_map, subview the entries and values and shift the entries array by subtracting out colid shift
-  //KokkosSparse::spmv("N", -1.0, k_persist_rectspmtx, lhs, 1.0, lhsp); //(where rhsp i.e. b was copied into lhsp, and lhs is the solution from part 1)
+  // lowertri
+
+  auto row_map_rectspmtx = thandle.get_row_map_rectspmtx();
+  auto entries_rectspmtx = thandle.get_entries_rectspmtx();
+  auto values_rectspmtx = thandle.get_values_rectspmtx();
+
+  typedef typename EntriesType::value_type crs_lno_t;
+  typedef typename ValuesType::value_type crs_scalar_t;
+  typedef typename RowMapType::value_type  crs_size_type;
+  typedef typename RowMapType::execution_space crs_exec_space;
+
+  crs_lno_t rectspmtx_nrows = thandle.get_rectspmtx_nrows();
+  crs_lno_t rectspmtx_ncols = thandle.get_rectspmtx_ncols();
+  crs_size_type rectspmtx_nnz = thandle.get_nnz_rectspmtx();
+
+  auto rectspmtx_row_start = thandle.get_rectspmtx_row_start();
+
+  auto lhsp = Kokkos::subview(flhs, Kokkos::pair<size_type, size_type>(rectspmtx_row_start, rectspmtx_row_start + rectspmtx_nrows)); 
+  auto rhsp = Kokkos::subview(frhs, Kokkos::pair<size_type, size_type>(rectspmtx_row_start, rectspmtx_row_start + rectspmtx_nrows)); 
+  Kokkos::deep_copy(lhsp, rhsp);
+
+
+  KokkosSparse::CrsMatrix<crs_scalar_t, crs_lno_t, crs_exec_space, void, crs_size_type> crs_rectspmtx("rect_spmtx", rectspmtx_nrows, rectspmtx_ncols, rectspmtx_nnz, values_rectspmtx, row_map_rectspmtx, entries_rectspmtx);  
+  KokkosSparse::spmv("N", -1.0, crs_rectspmtx, lhs, 1.0, lhsp); //(where rhsp i.e. b was copied into lhsp, and lhs is the solution from part 1)
+
+  // TODO Is this necessary???
+  Kokkos::fence();
+
 
 // Part 3. dense trisolve for remaining dense portion of x - use x as rhs and lhs in this step
 //           * Treat lhsp as partially updated rhsp, overwrite for final result
+
+  auto dense_trimtx = thandle.get_dense_trimtx();
 
 // cublass API to dense trsv
 //cublasStatus_t cublasDtrsv(cublasHandle_t handle, cublasFillMode_t uplo,
@@ -1713,10 +1740,10 @@ cudaProfilerStop();
   cublasDiagType_t diag = CUBLAS_DIAG_NON_UNIT;
   //cublasDiagType_t diag = CUBLAS_DIAG_UNIT;
   bool tri_is_lr = std::is_same<Kokkos::LayoutRight, typename TriSolveHandle::mtx_scalar_view_t::array_layout >::value;
-  const int AST = tri_is_lr?dense_tri.stride(0):dense_tri.stride(1);
+  const int AST = tri_is_lr?dense_trimtx.stride(0):dense_trimtx.stride(1);
   LDA = AST == 0 ? 1 : AST;
 
-  stat = cublasDtrsv(cublashandle, uplo, trans, diag, dense_tri.extent(0), dense_tri.data(), LDA, lhsp.data(), 1);
+  stat = cublasDtrsv(cublashandle, uplo, trans, diag, dense_trimtx.extent(0), dense_trimtx.data(), LDA, lhsp.data(), 1);
     if (stat != CUBLAS_STATUS_SUCCESS) {
         printf ("CUBLAS Dtrsv created failed\n");
         return EXIT_FAILURE;
