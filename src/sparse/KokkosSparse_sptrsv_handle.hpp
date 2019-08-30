@@ -593,7 +593,8 @@ public:
   size_type get_dense_partition_row_start() const { return dense_partition_row_start; }
 
   KOKKOS_INLINE_FUNCTION
-  size_type get_dense_partition_nrows() const { return dense_partition_nrows; }
+  size_type get_dense_partition_nrows() const { return require_symbolic_numeric_dense_phase == true ? dense_partition_nrows : 0; }
+  //size_type get_dense_partition_nrows() const { return dense_partition_nrows; }
 
 
   KOKKOS_INLINE_FUNCTION

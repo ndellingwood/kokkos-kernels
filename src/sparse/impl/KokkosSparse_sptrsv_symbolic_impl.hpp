@@ -80,6 +80,7 @@ void symbolic_chain_phase(TriSolveHandle &thandle, const NPLViewType &nodes_per_
   int update_chain = 0;
   //const int cutoff = std::is_same<typename Kokkos::DefaultExecutionSpace::memory_space, Kokkos::HostSpace>::value ? 1 : 256; // TODO chain cutoff hard-coded to 256: make this a "threshold" parameter in the handle
   const int cutoff = cutoff_threshold;
+  std::cout << "  cutoff_thresh = " << cutoff << std::endl;
   for ( size_type i = 0; i < level; ++i ) {
     auto cnpl = nodes_per_level(i);
     //std::cout << "incre chain_length  npl(" << i << ") = " << nodes_per_level(i) << std::endl;
@@ -229,6 +230,8 @@ void lower_tri_symbolic (TriSolveHandle &thandle, const RowMapType drow_map, con
 
         for (signed_integral_t offset = ptrstart; offset < ptrend; ++offset) {
           size_type col = entries(offset);
+          // FIXME: For lower_tri, colid is unchanged; shifted for upper_tri...
+          // FIXME: This check for col != row vs col < row will be broken with partial persist_sptrimtx, since using a row_map with rowid shifted to 0 but not colid
           if ( previous_level_list(col) == -1 && col != row ) { // unmarked
             if ( col < row ) {
               is_root = false;
@@ -353,12 +356,17 @@ void upper_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, co
   // Depending on algorithm, can be nrows - 1 vs dense_start_row - 1
   // FIXME Change this to allow for partitioned sparse mtx
 #ifdef DENSEPARTITION
-  auto starting_node = thandle.get_lvlsched_node_start();
-  auto ending_node = thandle.get_lvlsched_node_end();
+  auto dense_nrows = thandle.get_dense_partition_nrows();
+  auto starting_node = nrows - 1;
+  auto ending_node = 0;
+  //auto starting_node = thandle.get_lvlsched_node_start();
+  //auto ending_node = thandle.get_lvlsched_node_end();
 #else
   auto starting_node = nrows - 1;
   auto ending_node = 0;
 #endif
+  std::cout << "  upper_tri_symbolic debug: " << std::endl;
+  std::cout << "  starting_node = " << starting_node << "  ending_node = " << ending_node << "  nrows = " << nrows << std::endl;
 
   level_list(starting_node) = level;
   size_type node_count = 1; //upper tri: starting with node n already in level 0
@@ -375,7 +383,16 @@ void upper_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, co
         signed_integral_t ptrend   = row_map(row+1);
 
         for (signed_integral_t offset = ptrend-1; offset >= ptrstart; --offset) {
+#ifdef DENSEPARTITION
+          signed_integral_t original_col = entries(offset);
+          signed_integral_t col = original_col - dense_nrows;
+#else
           signed_integral_t col = entries(offset);
+#endif
+
+          // FIXME: This check for col != row vs col > row will be broken with partial persist_sptrimtx, since using a row_map with rowid shifted to 0 but not colid
+          // May need to fix row instead, using the shift, so that level_list stores the original rowid for the solve??
+          // FIXME: Or, is it that the solve needs similar colid adjustment as done here????
           if ( previous_level_list(col) == -1 && col != row ) { // unmarked
             if ( col > row ) {
               is_root = false;
@@ -608,12 +625,19 @@ void symbolic_dense_partition_algm( TriSolveHandle &thandle, const RowMapType dr
         if ( (is_lower_tri && colid < trimtx_col_start) || (!is_lower_tri && colid >= rectspmtx_col_start) ) {
           // increment row_map_rectspmtx(i+1)
           //++row_map_rectspmtx(i+1);
-          entries_rectspmtx(new_idx_offset) = colid;
+          entries_rectspmtx(new_idx_offset) = is_lower_tri ? colid : colid - dense_partition_nrows;
           ++new_idx_offset;
         }
       }
 
     });
+
+  Kokkos::fence();
+  auto hentrect = Kokkos::create_mirror_view(entries_rectspmtx);
+  Kokkos::deep_copy(hentrect, entries_rectspmtx);
+  for (size_t i = 0; i < hentrect.extent(0); ++i) {
+    std::cout << "  freq hentrect(" << i << ") = " << hentrect(i) << std::endl;
+  }
   
   // alloc dense tri mtx
   thandle.alloc_dense_trimtx(dense_partition_nrows, dense_partition_nrows);
@@ -766,6 +790,18 @@ void numeric_dense_partition_algm(TriSolveHandle &thandle, const RowMapType drow
   for (size_t i = 0; i < hvrs.extent(0); ++i) {
     std::cout << "  hvrs(" << i << ") = " << hvrs(i) << std::endl;
   }
+
+  Kokkos::fence();
+  auto hdense_tri = Kokkos::create_mirror_view(dense_trimtx);
+  Kokkos::deep_copy(hdense_tri, dense_trimtx);
+  for (size_t i = 0; i < hdense_tri.extent(0); ++i) {
+    for (size_t j = 0; j < hdense_tri.extent(1); ++j) {
+      std::cout << "  hdense_tri(" << i << "," << j << ") = " << hdense_tri(i,j) << std::endl;
+    }
+  }
+
+
+  std::cout << "  numeric complete" << std::endl;
   
 
 // OLD STUFF
