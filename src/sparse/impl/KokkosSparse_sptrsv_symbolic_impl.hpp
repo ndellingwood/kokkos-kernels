@@ -51,8 +51,8 @@
 #include <Kokkos_ArithTraits.hpp>
 #include <KokkosSparse_sptrsv_handle.hpp>
 
-//#define LVL_OUTPUT_INFO
-//#define CHAIN_LVL_OUTPUT_INFO
+#define LVL_OUTPUT_INFO
+#define CHAIN_LVL_OUTPUT_INFO
 
 // TODO Pass values array and store diagonal entries - should this always be done or optional?
 
@@ -678,11 +678,15 @@ void symbolic_dense_partition_algm( TriSolveHandle &thandle, const RowMapType dr
     upper_tri_symbolic(thandle, sprow_map, spentries);
   }
 #else
+  auto sptrimtx_row_start = thandle.get_persist_sptrimtx_row_start();
+  auto sptrimtx_nrows = thandle.get_persist_sptrimtx_nrows();
+  auto sptrimtx_row_map = Kokkos::subview( drow_map, Kokkos::pair<size_type,size_type>(sptrimtx_row_start, sptrimtx_row_start+sptrimtx_nrows+1) );
+
   if (thandle.is_lower_tri()) {
-    lower_tri_symbolic(thandle, dprow_map, dentries);
+    lower_tri_symbolic(thandle, sptrimtx_row_map, dentries);
   }
   else {
-    upper_tri_symbolic(thandle, dprow_map, dentries);
+    upper_tri_symbolic(thandle, sptrimtx_row_map, dentries);
   }
 #endif
 }
@@ -895,7 +899,7 @@ void numeric_dense_partition_algm(TriSolveHandle &thandle, const RowMapType drow
 #endif
 
   thandle.set_numeric_complete();
-}
+} // end numeric
 #endif
 
 
