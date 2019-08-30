@@ -449,7 +449,7 @@ template < class TriSolveHandle, class RowMapType, class EntriesType >
 void symbolic_dense_partition_algm( TriSolveHandle &thandle, const RowMapType drow_map, const EntriesType dentries) {
 
   typedef typename TriSolveHandle::size_type size_type;
-  typedef typename TriSolveHandle::scalar_t  scalar_t;
+//  typedef typename TriSolveHandle::scalar_t  scalar_t;
 
   // FIXME - no longer need to run symbolic on shifted sparse graph, use the original where level scheduling know where to begin/end based on partitioning
   // This routine will:
@@ -463,11 +463,12 @@ void symbolic_dense_partition_algm( TriSolveHandle &thandle, const RowMapType dr
 
 
   // shifted rectspmtx row_map allocation
-  auto row_map_rectspmtx = thandle.get_row_map_rectspmtx();
   auto dense_partition_nrows = thandle.get_dense_partition_nrows() ;
 
   // TODO Will the reference count help this allocation to persist beyond this function call?
-  row_map_rectspmtx = typename TriSolveHandle::nnz_row_view_t("row_map_rectspmtx", dense_partition_nrows+1);
+  thandle.alloc_row_map_rectspmtx(dense_partition_nrows+1);
+  auto row_map_rectspmtx = thandle.get_row_map_rectspmtx();
+  //row_map_rectspmtx = typename TriSolveHandle::nnz_row_view_t("row_map_rectspmtx", dense_partition_nrows+1);
   std::cout << "  row_map_rectspmtx allocated? extent(0) = " << row_map_rectspmtx.extent(0) << std::endl;
   std::cout << "  row_map_rectspmtx.data() = " << row_map_rectspmtx.data() << std::endl;
 
@@ -579,13 +580,15 @@ void symbolic_dense_partition_algm( TriSolveHandle &thandle, const RowMapType dr
 
   std::cout << "  rectspmtx_nnz = " << rectspmtx_nnz << std::endl;
 
+  thandle.alloc_entries_rectspmtx(rectspmtx_nnz); 
   auto entries_rectspmtx= thandle.get_entries_rectspmtx(); 
-  entries_rectspmtx= typename TriSolveHandle::nnz_lno_view_t("entries_rectspmtx", rectspmtx_nnz);
+  //entries_rectspmtx= typename TriSolveHandle::nnz_lno_view_t("entries_rectspmtx", rectspmtx_nnz);
   std::cout << "  entries_rectspmtx allocated? extent(0) = " << entries_rectspmtx.extent(0) << std::endl;
   std::cout << "  entries_rectspmtx.data() = " << entries_rectspmtx.data() << std::endl;
 
+  thandle.alloc_values_rectspmtx(rectspmtx_nnz);
   auto values_rectspmtx= thandle.get_values_rectspmtx();
-  values_rectspmtx= typename TriSolveHandle::nnz_scalar_view_t("values_rectspmtx", rectspmtx_nnz);
+  //values_rectspmtx= typename TriSolveHandle::nnz_scalar_view_t("values_rectspmtx", rectspmtx_nnz);
   std::cout << "  values_rectspmtx allocated? extent(0) = " << values_rectspmtx.extent(0) << std::endl;
   std::cout << "  values_rectspmtx.data() = " << values_rectspmtx.data() << std::endl;
 
@@ -601,7 +604,6 @@ void symbolic_dense_partition_algm( TriSolveHandle &thandle, const RowMapType dr
 
       for (size_type offset = offset_start; offset < offset_end; ++offset) {
         size_type colid = dentries(offset);
-        // Remove out-of-sparse-rect indices
         // Count in-sparse-rect entries per row, store at row_map(rowid+1) in anticipation of followup scan
         if ( (is_lower_tri && colid < trimtx_col_start) || (!is_lower_tri && colid >= rectspmtx_col_start) ) {
           // increment row_map_rectspmtx(i+1)
@@ -614,8 +616,9 @@ void symbolic_dense_partition_algm( TriSolveHandle &thandle, const RowMapType dr
     });
   
   // alloc dense tri mtx
+  thandle.alloc_dense_trimtx(dense_partition_nrows, dense_partition_nrows);
   auto dense_trimtx= thandle.get_dense_trimtx();
-  dense_trimtx= typename TriSolveHandle::mtx_scalar_view_t("dense_tri_mtx", dense_partition_nrows, dense_partition_nrows);
+  //dense_trimtx= typename TriSolveHandle::mtx_scalar_view_t("dense_tri_mtx", dense_partition_nrows, dense_partition_nrows);
   std::cout << "  dense_trimtx allocated? extent(0) = " << dense_trimtx.extent(0) << "  extent(1) = " << dense_trimtx.extent(1) << std::endl;
   std::cout << "  dense_trimtx.data() = " << dense_trimtx.data() << std::endl;
 
@@ -742,8 +745,6 @@ void numeric_dense_partition_algm(TriSolveHandle &thandle, const RowMapType drow
         auto val = dvalues(offset);
         // Count in-sparse-rect entries per row, store at row_map(rowid+1) in anticipation of followup scan
         if ( (is_lower_tri && colid < trimtx_col_start) || (!is_lower_tri && colid >= rectspmtx_col_start) ) {
-          // increment row_map_rectspmtx(i+1)
-          //++row_map_rectspmtx(i+1);
           values_rectspmtx(new_idx_offset) = val;
           ++new_idx_offset;
         }
@@ -754,6 +755,13 @@ void numeric_dense_partition_algm(TriSolveHandle &thandle, const RowMapType drow
       }
 
     });
+
+  Kokkos::fence();
+  auto hvrs = Kokkos::create_mirror_view(values_rectspmtx);
+  Kokkos::deep_copy(hvrs, values_rectspmtx);
+  for (size_t i = 0; i < hvrs.extent(0); ++i) {
+    std::cout << "  hvrs(" << i << ") = " << hvrs(i) << std::endl;
+  }
   
 
 // OLD STUFF

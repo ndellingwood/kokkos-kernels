@@ -53,6 +53,9 @@
 #include <KokkosSparse_spmv.hpp>
 #include <KokkosSparse_CrsMatrix.hpp>
 
+#include <KokkosBatched_Trsv_Decl.hpp>
+#include <KokkosBatched_Trsv_Serial_Impl.hpp>
+
 //#define LVL_OUTPUT_INFO
 //#define CHAIN_DEBUG_OUTPUT
 //#define TRISOLVE_TIMERS
@@ -1455,8 +1458,8 @@ void tri_solve_partition_dense(TriSolveHandle & thandle, const RowMapType frow_m
 
 
 // Part 1. Sparse partition of the matrix, computation done as in other algorithms, just need to take subviews of the input view arrays
-  auto dense_row_start = thandle.get_dense_partition_row_start();
-  auto dense_partition_nrows = thandle.get_dense_partition_nrows() ;
+//  auto dense_row_start = thandle.get_dense_partition_row_start();
+//  auto dense_partition_nrows = thandle.get_dense_partition_nrows() ;
 
   auto persist_sptrimtx_row_start = thandle.get_persist_sptrimtx_row_start();
   auto persist_sptrimtx_nrows = thandle.get_persist_sptrimtx_nrows();
@@ -1756,6 +1759,25 @@ cudaProfilerStop();
     }
 #else
     // Call BLAS routine...
+  Kokkos::parallel_for("Call batched_trsv", Kokkos::RangePolicy<Kokkos::DefaultExecutionSpace>(0,1), 
+    KOKKOS_LAMBDA( const int i ) {
+        if (is_lower) {
+        KokkosBatched::SerialTrsv<
+          KokkosBatched::Uplo::Lower,
+          KokkosBatched::Trans::NoTranspose,
+          KokkosBatched::Diag::NonUnit,
+          KokkosBatched::Algo::Trsv::Unblocked
+        >::invoke(1.0, dense_trimtx, lhsp);
+      }
+      else {
+        KokkosBatched::SerialTrsv<
+          KokkosBatched::Uplo::Upper,
+          KokkosBatched::Trans::NoTranspose,
+          KokkosBatched::Diag::NonUnit,
+          KokkosBatched::Algo::Trsv::Unblocked
+        >::invoke(1.0, dense_trimtx, lhsp);
+      }
+    });
 #endif
 
 

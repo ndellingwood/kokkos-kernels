@@ -558,12 +558,19 @@ public:
   KOKKOS_INLINE_FUNCTION
   nnz_row_view_t get_row_map_rectspmtx() { return row_map_rectspmtx; }
 
+  inline
+  void alloc_row_map_rectspmtx(size_type dim) { row_map_rectspmtx = nnz_row_view_t("row_map_rectspmtx", dim); }
+
   KOKKOS_INLINE_FUNCTION
   nnz_lno_view_t get_entries_rectspmtx() { return entries_rectspmtx; }
+
+  inline
+  void alloc_entries_rectspmtx(size_type dim) { entries_rectspmtx = nnz_lno_view_t("entries_rectspmtx", dim); }
 
   KOKKOS_INLINE_FUNCTION
   nnz_scalar_view_t get_values_rectspmtx() { return values_rectspmtx; }
 
+  void alloc_values_rectspmtx(size_type dim) { values_rectspmtx = nnz_scalar_view_t("values_rectspmtx", dim); }
 
   inline
   void set_dense_partition_row_percent(const float rp) { 
@@ -647,6 +654,8 @@ public:
   KOKKOS_INLINE_FUNCTION
   mtx_scalar_view_t get_dense_trimtx() { return dense_trimtx; }
 
+  inline
+  void alloc_dense_trimtx(size_type dim0, size_type dim1) { dense_trimtx = mtx_scalar_view_t("dense_trimtx", dim0, dim1); }
 
 // FIXME Unused - remove, if they turn out to be incorrect/unnecessary
 /*
