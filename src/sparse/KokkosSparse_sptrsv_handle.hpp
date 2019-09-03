@@ -348,6 +348,7 @@ public:
       if (auto_set_dense_partition_percent == true) {
         // The row start will depend on whether matrix is upper vs lower tri
         dense_partition_nrows = 0.01*nrows;
+        dense_partition_row_percent = 0.01; // Auto-set for now, will override if user provides a value
         std::cout << "  At handle init assume 1% dense_partition_nrows = " << dense_partition_nrows << std::endl;
       }
       else {
@@ -393,14 +394,21 @@ public:
     {
       // FIXME Do not use nrows (full matrix) in this case
       // Fixed - created a function to return correct value, this else-if routine can take over
-      std::cout << "  init_handle: level schedule allocs" << std::endl;
+      std::cout << "  init_handle: level schedule allocs dense_partition" << std::endl;
+      // FIXME!!!!!! This allocs level_list before user-provided nrows is set...
+      std::cout << "    sptrimtx_nrows = " << get_persist_sptrimtx_nrows() << std::endl;
       set_num_levels(0);
       level_list = signed_nnz_lno_view_t(Kokkos::ViewAllocateWithoutInitializing("level_list"), get_persist_sptrimtx_nrows() );
       Kokkos::deep_copy( level_list, signed_integral_t(-1) );
+      std::cout << "    init_handle: level_list.extent(0) = " << level_list.extent(0) << std::endl;
       nodes_per_level =  nnz_lno_view_t("nodes_per_level", get_persist_sptrimtx_nrows() );
       hnodes_per_level = Kokkos::create_mirror_view(nodes_per_level);
+      std::cout << "    init_handle: nodes_per_level.extent(0) = " << nodes_per_level.extent(0) << std::endl;
+      std::cout << "    init_handle: hnodes_per_level.extent(0) = " << hnodes_per_level.extent(0) << std::endl;
       nodes_grouped_by_level = nnz_lno_view_t("nodes_grouped_by_level", get_persist_sptrimtx_nrows() );
       hnodes_grouped_by_level = Kokkos::create_mirror_view(nodes_grouped_by_level);
+      std::cout << "    init_handle: nodes_grouped_by_level.extent(0) = " << nodes_grouped_by_level.extent(0) << std::endl;
+      std::cout << "    init_handle: hnodes_grouped_by_level.extent(0) = " << hnodes_grouped_by_level.extent(0) << std::endl;
     }
 #endif
 
@@ -484,6 +492,7 @@ public:
           //throw std::runtime_error ("  sptrsv_handle.init_handle error: chain_threshold > team_size - this is an invalid pair of values for this algorithm");
         }
       }
+      std::cout << "    init_handle: h_chain_ptr.extent(0) = " << h_chain_ptr.extent(0) << std::endl;
     }
 #endif
     else {
@@ -583,6 +592,8 @@ public:
       std::cout << "  User resultant dense_partition_nrows = " << dense_partition_nrows << std::endl;
       dense_partition_row_start = lower_tri ? (nrows - dense_partition_nrows) : 0;
       std::cout << "  User resultant dense_row_start = " << dense_partition_row_start << std::endl;
+      // For now, we need to re-initialize the handle so the level_list, chain_ptr, etc are allocated with correct size
+      //init_handle(nrows);
     }
     else {
       std::cout << "  dprs can not be set after symbolic and numeric phase, request ignored - destroy and create a new handle to do this for now." << std::endl;
@@ -620,7 +631,11 @@ public:
   size_type get_persist_sptrimtx_row_start() const { return lower_tri ? size_type(0) : dense_partition_nrows; }
 
   KOKKOS_INLINE_FUNCTION
-  size_type get_persist_sptrimtx_nrows() const { return require_symbolic_numeric_dense_phase ? (nrows - dense_partition_nrows) : nrows; }
+  size_type get_persist_sptrimtx_nrows() const { return nrows; }
+  //size_type get_persist_sptrimtx_nrows() const { return require_symbolic_numeric_dense_phase ? (nrows - dense_partition_nrows) : nrows; }
+
+  KOKKOS_INLINE_FUNCTION
+  size_type get_persist_sptrimtx_nrows_solve() const { return require_symbolic_numeric_dense_phase ? (nrows - dense_partition_nrows) : nrows; }
 
   // Needed for the solve phase
   KOKKOS_INLINE_FUNCTION

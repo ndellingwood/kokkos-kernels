@@ -60,6 +60,7 @@
 //#define LVL_OUTPUT_INFO
 //#define CHAIN_DEBUG_OUTPUT
 //#define PRINT1DVIEWS
+//#define SOLVE_DEBUG_OUTPUT
 
 #define KOKKOSPSTRSV_SOLVE_IMPL_PROFILE 1
 #if defined(KOKKOS_ENABLE_CUDA) && defined(KOKKOSPSTRSV_SOLVE_IMPL_PROFILE)
@@ -1521,7 +1522,7 @@ void tri_solve_partition_dense(TriSolveHandle & thandle, const RowMapType frow_m
 #endif
 
   auto persist_sptrimtx_row_start = thandle.get_persist_sptrimtx_row_start();
-  auto persist_sptrimtx_nrows = thandle.get_persist_sptrimtx_nrows();
+  auto persist_sptrimtx_nrows = thandle.get_persist_sptrimtx_nrows_solve();
   auto persist_sptrimtx_row_end = persist_sptrimtx_row_start + persist_sptrimtx_nrows;
 
 
@@ -1573,6 +1574,13 @@ cudaProfilerStop();
 #else
   size_type dense_nrows = 0;
 #endif
+
+#ifdef SOLVE_DEBUG_OUTPUT
+  std::cout << "  solve: dense_nrows = " << dense_nrows << std::endl;
+  std::cout << "  solve: num_chain_entries = " << num_chain_entries << std::endl;
+      std::cout << "    h_chain_ptr.extent(0) = " << h_chain_ptr.extent(0) << std::endl;
+      std::cout << "    hnodes_per_level.extent(0) = " << hnodes_per_level.extent(0) << std::endl;
+#endif
   
   
   for ( size_type chainlink = 0; chainlink < num_chain_entries; ++chainlink ) {
@@ -1593,12 +1601,14 @@ cudaProfilerStop();
       int team_size = thandle.get_team_size();
 
       size_type lvl_nodes = hnodes_per_level(schain); //lvl == echain????
+#ifdef SOLVE_DEBUG_OUTPUT
+      std::cout << "  *** Calling non-single-block solve *** " << std::endl;
+      std::cout << "      team_size = " << team_size << std::endl;
+      std::cout << "      lvl_nodes = " << lvl_nodes << std::endl;
+#endif
   #ifdef TRISOLVE_TIMERS
       // full-solve time
       tp1_ctr++;
-      //std::cout << "  *** Calling non-single-block solve *** " << std::endl;
-      //std::cout << "      team_size = " << team_size << std::endl;
-      //std::cout << "      lvl_nodes = " << lvl_nodes << std::endl;
       timer_full_solve.reset();
   #endif
 
@@ -1650,13 +1660,15 @@ cudaProfilerStop();
         typedef Kokkos::TeamPolicy<execution_space> policy_type;
         typedef Kokkos::TeamPolicy<LargerCutoffTag, execution_space> large_cutoff_policy_type;
         auto cutoff = thandle.get_chain_threshold();
-        const int team_size = cutoff;
-  #ifdef TRISOLVE_TIMERS
-     // full-solve time
-      chain_ctr++;
+        const int team_size = cutoff == 0 ? 1 : cutoff;
+#ifdef SOLVE_DEBUG_OUTPUT
       std::cout << "  *** Calling single-block solve *** " << std::endl;
       std::cout << "      team_size = " << team_size << "  cutoff = " << cutoff << std::endl;
       std::cout << "      lvl_nodes = " << lvl_nodes << std::endl;
+#endif
+  #ifdef TRISOLVE_TIMERS
+     // full-solve time
+      chain_ctr++;
       timer_chain_solve.reset();
   #endif
 //        const int team_size = std::is_same<typename Kokkos::DefaultExecutionSpace::memory_space, Kokkos::HostSpace>::value ? 1 : 256; // TODO chainlink cutoff hard-coded to 256: make this a "threshold" parameter in the handle
@@ -1720,7 +1732,7 @@ cudaProfilerStop();
   } // end for chainlink
 
 #ifdef PRINT1DVIEWS
-  std::cout << "Output sptrimtx solution" << std::endl;
+  std::cout << "Complete sptrimtx solution" << std::endl;
   print_view1d_solve(lhs);
 #endif
 
@@ -1856,6 +1868,7 @@ cudaProfilerStop();
 #endif
 
   Kokkos::fence();
+  std::cout << "solve complete" << std::endl;
 
   #ifdef TRISOLVE_TIMERS
   time_densetri += timer_densetri.seconds();

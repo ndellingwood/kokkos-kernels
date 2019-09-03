@@ -55,6 +55,7 @@
 //#define LVL_OUTPUT_INFO
 //#define CHAIN_LVL_OUTPUT_INFO
 //#define PRINT1DVIEWSSYMB
+//#define DEBUGSYMBDENSE
 
 // TODO Pass values array and store diagonal entries - should this always be done or optional?
 
@@ -228,9 +229,6 @@ void lower_tri_symbolic (TriSolveHandle &thandle, const RowMapType drow_map, con
   // diagonal_offsets is uninitialized - deep_copy unnecessary at the beginning, only needed at the end
   auto hdiagonal_offsets = Kokkos::create_mirror_view(diagonal_offsets);
 
-  // node 0 is trivially independent in lower tri solve, start with it in level 0
-  size_type level = 0;
-  // FIXME Change this to allow for partitioned sparse mtx
 #ifdef DENSEPARTITION
   //auto starting_node = thandle.get_lvlsched_node_start();
   //auto ending_node = thandle.get_lvlsched_node_end();
@@ -241,6 +239,9 @@ void lower_tri_symbolic (TriSolveHandle &thandle, const RowMapType drow_map, con
   auto ending_node = nrows;
 #endif
 
+  size_type level = 0;
+  // node 0 is trivially independent in lower tri solve, start with it in level 0
+  // FIXME Change this to allow for partitioned sparse mtx
   level_list(starting_node) = level;
   size_type node_count = 1; //lower tri: starting with node 0 already in level 0
 
@@ -256,7 +257,7 @@ void lower_tri_symbolic (TriSolveHandle &thandle, const RowMapType drow_map, con
         signed_integral_t ptrend   = row_map(row+1);
 
         for (signed_integral_t offset = ptrstart; offset < ptrend; ++offset) {
-          size_type col = entries(offset);
+          size_type col = entries(offset); //FIXME: Can col be incorrectly mapped, wrong range compared to shifted re-start row_map?
           // FIXME: For lower_tri, colid is unchanged; shifted for upper_tri...
           if ( previous_level_list(col) == -1 && col != row ) { // unmarked
             if ( col < row ) {
@@ -270,6 +271,11 @@ void lower_tri_symbolic (TriSolveHandle &thandle, const RowMapType drow_map, con
             //TODO possibly store/sort in same order as the nodes in the level_list
             //TODO Maybe run FULL check the first round through without breaking in upper if statement...
             hdiagonal_offsets(row) = offset;
+          }
+          else if ( col > row ) {
+            std::cout << "SYMB ERROR: Lower tri with colid > rowid - SHOULD NOT HAPPEN!!!";
+            std::cout << "\nrow = " << row << "  col = " << col << "  offset = " << offset << std::endl;
+            exit(-1);
           }
         } // end for offset , i.e. cols of this row
 
@@ -292,7 +298,6 @@ void lower_tri_symbolic (TriSolveHandle &thandle, const RowMapType drow_map, con
     //std::cout << "  node_count = " << node_count << "  level = " << level << "  nrows = " << nrows << std::endl;
   } // end while
 
-  thandle.set_symbolic_complete();
   thandle.set_num_levels(level);
 
   // Create the chain now
@@ -300,6 +305,8 @@ void lower_tri_symbolic (TriSolveHandle &thandle, const RowMapType drow_map, con
     std::cout << "  Symbolic chain phase begin" << std::endl;
     symbolic_chain_phase(thandle, nodes_per_level);
   }
+
+  thandle.set_symbolic_complete();
 
   // Output check
 #ifdef LVL_OUTPUT_INFO
@@ -537,9 +544,12 @@ void symbolic_dense_partition_algm( TriSolveHandle &thandle, const RowMapType dr
 
   auto dense_row_start = thandle.get_dense_partition_row_start();
 
+#ifdef DEBUGSYMBDENSE
   std::cout << "\n\n  Begin symbolic dense partition" << std::endl;
   std::cout << "  dense_row_start = " << dense_row_start << std::endl;
   std::cout << "  dense_nrows = " << dense_partition_nrows << std::endl;
+  std::cout << "  drs + dense_nrows + 1 = " << dense_partition_nrows+dense_row_start+1 << std::endl;
+#endif
 
   ShiftedEntriesStart shifted_entries_start(Kokkos::ViewAllocateWithoutInitializing("ses"));
 
@@ -568,7 +578,7 @@ void symbolic_dense_partition_algm( TriSolveHandle &thandle, const RowMapType dr
     trimtx_col_start = 0; // ends at rectspmtx_col_start
   }
 
-#ifdef PRINT1DVIEWSSYMB
+#ifdef DEBUGSYMBDENSE
   std::cout << "  is_lower_tri = " << is_lower_tri << std::endl;
   std::cout << "  rectspmtx_col_start = " << rectspmtx_col_start << std::endl;
   std::cout << "  trimtx_col_start = " << trimtx_col_start << std::endl;
@@ -616,7 +626,9 @@ print_view1d_symbolic(row_map_rectspmtx);
 
   thandle.set_nnz_rectspmtx(rectspmtx_nnz);
 
+#ifdef DEBUGSYMBDENSE
   std::cout << "  rectspmtx_nnz = " << rectspmtx_nnz << std::endl;
+#endif
 
   thandle.alloc_entries_rectspmtx(rectspmtx_nnz); 
   auto entries_rectspmtx= thandle.get_entries_rectspmtx(); 
@@ -660,7 +672,10 @@ print_view1d_symbolic(row_map_rectspmtx);
   auto sptrimtx_row_map = Kokkos::subview( drow_map, Kokkos::pair<size_type,size_type>(sptrimtx_row_start, sptrimtx_row_start+sptrimtx_nrows+1) );
   Kokkos::fence();
 
+#ifdef DEBUGSYMBDENSE
+  std::cout << " sptrimtx_row_start = " << sptrimtx_row_start << "  sptrimtx_nrows = " << sptrimtx_nrows << "  sptri end " << sptrimtx_row_start+sptrimtx_nrows+1 << std::endl;
   std::cout << "  Call lvl schedule symbolic" << std::endl;
+#endif
 
   if (thandle.is_lower_tri()) {
     lower_tri_symbolic(thandle, sptrimtx_row_map, dentries);
