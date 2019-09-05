@@ -382,6 +382,7 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
     }
     #endif
 
+    kh.destroy_sptrsv_handle();
   }
 
 #ifdef KOKKOSKERNELS_ENABLE_TPL_CUSPARSE
@@ -393,6 +394,7 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
 #endif
   } // end lowertri
 
+  Kokkos::fence();
   std::cout << "\n\n" << std::endl;
 // UPPERTRI
   if (!ufilename.empty())
@@ -656,6 +658,8 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
       std::cout << "OUTFILE DID NOT OPEN!!!" << std::endl;
     }
     #endif
+
+    kh.destroy_sptrsv_handle();
   }
 
 #ifdef KOKKOSKERNELS_ENABLE_TPL_CUSPARSE
@@ -666,6 +670,7 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
     cusparseDestroy(handle);
 #endif
   } // end uppertri
+  Kokkos::fence();
 
   return 0;
 }
@@ -745,6 +750,7 @@ int main(int argc, char **argv)
   if((strcmp(argv[i],"-vl")==0)) {vector_length=atoi(argv[++i]); continue;}
   if((strcmp(argv[i],"-ct")==0)) {chain_threshold=atoi(argv[++i]); continue;}
   if((strcmp(argv[i],"-dr")==0)) {dense_row_percent=atof(argv[++i]); continue;}
+  if((strcmp(argv[i],"-l")==0)) {loop=atoi(argv[++i]); continue;}
   if((strcmp(argv[i],"--offset")==0)) {idx_offset=atoi(argv[++i]); continue;}
   if((strcmp(argv[i],"--loop")==0)) {loop=atoi(argv[++i]); continue;}
 /*
