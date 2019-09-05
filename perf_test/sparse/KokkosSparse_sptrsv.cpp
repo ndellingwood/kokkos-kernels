@@ -74,7 +74,7 @@ using namespace KokkosKernels::Experimental;
 
 //#define PRINT_HLEVEL_FREQ_PLOT
 
-enum {DEFAULT, CUSPARSE, LVLSCHED_RP, LVLSCHED_TP1, LVLSCHED_TP2, LVLSCHED_TP1CHAIN, LVLSCHED_DENSEP_TP1};
+enum {DEFAULT, CUSPARSE, LVLSCHED_RP, LVLSCHED_TP1, LVLSCHED_TP2, LVLSCHED_TP1CHAIN, LVLSCHED_DENSEP_TP1, LVLSCHED_DENSEP_TP2};
 
 #ifdef PRINTVIEWSSPTRSVPERF
 template <class ViewType>
@@ -242,6 +242,15 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
         kh.create_sptrsv_handle(SPTRSVAlgorithm::SEQLVLSCHD_DENSEP_TP1, nrows, is_lower_tri);
         kh.get_sptrsv_handle()->reset_chain_threshold(chain_threshold);
         if (team_size != -1) kh.get_sptrsv_handle()->set_team_size(team_size);
+        if (dense_row_percent != -1) kh.get_sptrsv_handle()->set_dense_partition_row_percent(dense_row_percent);
+        kh.get_sptrsv_handle()->print_algorithm();
+        break;
+      case LVLSCHED_DENSEP_TP2:
+        printf("dense_row_percent %f\n", dense_row_percent);
+        kh.create_sptrsv_handle(SPTRSVAlgorithm::SEQLVLSCHD_DENSEP_TP2, nrows, is_lower_tri);
+        kh.get_sptrsv_handle()->reset_chain_threshold(chain_threshold);
+        if (team_size != -1) kh.get_sptrsv_handle()->set_team_size(team_size);
+        if (vector_length != -1) kh.get_sptrsv_handle()->set_vector_size(vector_length);
         if (dense_row_percent != -1) kh.get_sptrsv_handle()->set_dense_partition_row_percent(dense_row_percent);
         kh.get_sptrsv_handle()->print_algorithm();
         break;
@@ -524,6 +533,15 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
         if (dense_row_percent != -1) kh.get_sptrsv_handle()->set_dense_partition_row_percent(dense_row_percent);
         kh.get_sptrsv_handle()->print_algorithm();
         break;
+      case LVLSCHED_DENSEP_TP2:
+        printf("dense_row_percent %f\n", dense_row_percent);
+        kh.create_sptrsv_handle(SPTRSVAlgorithm::SEQLVLSCHD_DENSEP_TP2, nrows, is_lower_tri);
+        kh.get_sptrsv_handle()->reset_chain_threshold(chain_threshold);
+        if (team_size != -1) kh.get_sptrsv_handle()->set_team_size(team_size);
+        if (vector_length != -1) kh.get_sptrsv_handle()->set_vector_size(vector_length);
+        if (dense_row_percent != -1) kh.get_sptrsv_handle()->set_dense_partition_row_percent(dense_row_percent);
+        kh.get_sptrsv_handle()->print_algorithm();
+        break;
       case CUSPARSE:
 #ifdef KOKKOSKERNELS_ENABLE_TPL_CUSPARSE
         std::cout << "CUSPARSE: No kk interface added yet" << std::endl;
@@ -680,7 +698,7 @@ void print_help_sptrsv() {
   printf("Options:\n");
   printf("  --test [OPTION] : Use different kernel implementations\n");
   printf("                    Options:\n");
-  printf("                      lvlrp, lvltp1, lvltp2, lvltp1chain, lvldensetp1\n\n");
+  printf("                      lvlrp, lvltp1, lvltp2, lvltp1chain, lvldensetp1, lvldensetp2\n\n");
   printf("                      cusparse           (Vendor Libraries)\n\n");
   printf("  -lf [file]      : Read in Matrix Market formatted text file 'file'.\n");
   printf("  -uf [file]      : Read in Matrix Market formatted text file 'file'.\n");
@@ -738,6 +756,9 @@ int main(int argc, char **argv)
     }
     if((strcmp(argv[i],"lvldensetp1")==0)) {
       tests.push_back( LVLSCHED_DENSEP_TP1 );
+    }
+    if((strcmp(argv[i],"lvldensetp2")==0)) {
+      tests.push_back( LVLSCHED_DENSEP_TP2 );
     }
     if((strcmp(argv[i],"cusparse")==0)) {
       tests.push_back( CUSPARSE );

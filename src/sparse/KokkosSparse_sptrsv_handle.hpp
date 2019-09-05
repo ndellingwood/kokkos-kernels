@@ -55,7 +55,7 @@ namespace KokkosSparse {
 namespace Experimental {
 
 // TODO TP2 algorithm had issues with some offset-ordinal combo to be addressed when compiled in Trilinos...
-enum class SPTRSVAlgorithm { SEQLVLSCHD_RP, SEQLVLSCHD_TP1, SEQLVLSCHED_TP2, SEQLVLSCHD_TP1CHAIN , SEQLVLSCHD_DENSEP_TP1 };
+enum class SPTRSVAlgorithm { SEQLVLSCHD_RP, SEQLVLSCHD_TP1, SEQLVLSCHED_TP2, SEQLVLSCHD_TP1CHAIN , SEQLVLSCHD_DENSEP_TP1, SEQLVLSCHD_DENSEP_TP2  };
 
 template <class size_type_, class lno_t_, class scalar_t_,
           class ExecutionSpace,
@@ -153,6 +153,7 @@ private:
         || algm == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_TP1CHAIN
 #ifdef DENSEPARTITION
         || algm == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_DENSEP_TP1
+        || algm == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_DENSEP_TP2
 #endif
        )
     {
@@ -167,6 +168,7 @@ private:
     if (algm == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_TP1CHAIN
 #ifdef DENSEPARTITION
         || algm == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_DENSEP_TP1
+        || algm == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_DENSEP_TP2
 #endif
        )
     {
@@ -227,7 +229,9 @@ private:
   bool numeric_complete;
 
   void set_if_algm_require_dense_partition() {
-    if (algm == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_DENSEP_TP1) {
+    if (algm == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_DENSEP_TP1
+        || algm == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_DENSEP_TP2
+       ) {
       require_symbolic_numeric_dense_phase = true;
     }
     else {
@@ -806,6 +810,9 @@ public:
 #ifdef DENSEPARTITION
     if ( algm == SPTRSVAlgorithm::SEQLVLSCHD_DENSEP_TP1 )
       std::cout << "SEQLVLSCHD_DENSEP_TP1" << std::endl;;
+
+    if ( algm == SPTRSVAlgorithm::SEQLVLSCHD_DENSEP_TP2 )
+      std::cout << "SEQLVLSCHD_DENSEP_TP2" << std::endl;;
 #endif
   }
 
@@ -828,6 +835,9 @@ public:
 #ifdef DENSEPARTITION
     if ( algm == SPTRSVAlgorithm::SEQLVLSCHD_DENSEP_TP1 )
       ret_string = "SEQLVLSCHD_DENSEP_TP1";
+
+    if ( algm == SPTRSVAlgorithm::SEQLVLSCHD_DENSEP_TP2 )
+      ret_string = "SEQLVLSCHD_DENSEP_TP2";
 #endif
 
     return ret_string;
@@ -842,6 +852,7 @@ public:
     else if(name=="SPTRSV_TEAMPOLICY1CHAIN")  return SPTRSVAlgorithm::SEQLVLSCHD_TP1CHAIN;
 #ifdef DENSEPARTITION
     else if(name=="SPTRSV_DENSEPARTITION_TEAMPOLICY1") return  SPTRSVAlgorithm::SEQLVLSCHD_DENSEP_TP1;
+    else if(name=="SPTRSV_DENSEPARTITION_TEAMPOLICY2") return  SPTRSVAlgorithm::SEQLVLSCHD_DENSEP_TP2;
 #endif
     else
       throw std::runtime_error("Invalid SPTRSVAlgorithm name");

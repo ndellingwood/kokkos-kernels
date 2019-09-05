@@ -169,7 +169,9 @@ struct SPTRSV_SOLVE<KernelHandle, RowMapType, EntriesType, ValuesType, BType, XT
         Experimental::tri_solve_chain( *sptrsv_handle, row_map, entries, values, b, x, true);
       }
 #ifdef DENSEPARTITION
-      else if ( sptrsv_handle->get_algorithm() == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_DENSEP_TP1 ) {
+      else if ( sptrsv_handle->get_algorithm() == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_DENSEP_TP1 
+               || sptrsv_handle->get_algorithm() == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_DENSEP_TP2
+              ) {
         Kokkos::Timer timer;
         Experimental::numeric_dense_partition_algm(*sptrsv_handle, row_map, entries, values); // vals not an argument, this needs its own file, or move to solve...
         std::cout << "Numeric time: " << timer.seconds() << std::endl;
@@ -194,7 +196,9 @@ struct SPTRSV_SOLVE<KernelHandle, RowMapType, EntriesType, ValuesType, BType, XT
         Experimental::tri_solve_chain( *sptrsv_handle, row_map, entries, values, b, x, false);
       }
 #ifdef DENSEPARTITION
-      else if ( sptrsv_handle->get_algorithm() == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_DENSEP_TP1 ) {
+      else if ( sptrsv_handle->get_algorithm() == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_DENSEP_TP1 
+               || sptrsv_handle->get_algorithm() == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_DENSEP_TP2
+              ) {
         Kokkos::Timer timer;
         Experimental::numeric_dense_partition_algm(*sptrsv_handle, row_map, entries, values); // vals not an argument, this needs its own file, or move to solve...
         std::cout << "Numeric time: " << timer.seconds() << std::endl;

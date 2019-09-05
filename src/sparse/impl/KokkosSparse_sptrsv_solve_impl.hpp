@@ -57,14 +57,16 @@
 #include <KokkosBatched_Trsv_Serial_Impl.hpp>
 
 #define TRISOLVE_TIMERS
+//#define TRISOLVE_TIMERS_ITER_OUTPUT
 //
 //#define LVL_OUTPUT_INFO
 //#define CHAIN_DEBUG_OUTPUT
 //#define PRINT1DVIEWS
 //#define SOLVE_DEBUG_OUTPUT
 //#define USEDIAGVALUES
+//#define SWAPPARFORS
 
-#define KOKKOSPSTRSV_SOLVE_IMPL_PROFILE 1
+//#define KOKKOSPSTRSV_SOLVE_IMPL_PROFILE 1
 #if defined(KOKKOS_ENABLE_CUDA) && defined(KOKKOSPSTRSV_SOLVE_IMPL_PROFILE)
 #include "cuda_profiler_api.h"
 #endif
@@ -93,6 +95,7 @@ void print_view1d_solve(const ViewType dv) {
   std::cout << std::endl;
 }
 #endif
+
 
 // This functor unifies the lower and upper implementations, the hope is the "is_lowertri" check does not add noticable time on larger problems
 template <class RowMapType, class EntriesType, class ValuesType, class LHSType, class RHSType, class NGBLType>
@@ -568,6 +571,7 @@ struct UpperTriLvlSchedRPSolverFunctor
 
 };
 
+
 template <class RowMapType, class EntriesType, class ValuesType, class LHSType, class RHSType, class NGBLType>
 struct UpperTriLvlSchedTP1SolverFunctor
 {
@@ -751,6 +755,113 @@ struct UpperTriLvlSchedTP2SolverFunctor
 
 };
 
+
+template <class RowMapType, class EntriesType, class ValuesType, class LHSType, class RHSType, class NGBLType>
+struct TriLvlSchedTP2SolverFunctor
+{
+  typedef typename RowMapType::execution_space execution_space;
+  typedef Kokkos::TeamPolicy<execution_space> policy_type;
+  typedef typename policy_type::member_type member_type;
+  typedef typename EntriesType::non_const_value_type lno_t;
+  typedef typename ValuesType::non_const_value_type scalar_t;
+
+  RowMapType row_map;
+  EntriesType entries;
+  ValuesType values;
+  LHSType lhs;
+  RHSType rhs;
+  NGBLType nodes_grouped_by_level;
+
+  const bool is_lowertri;
+  long node_count; // like "block" offset into ngbl, my_league is the "local" offset
+  long node_groups;
+  long dense_nrows;
+
+
+  TriLvlSchedTP2SolverFunctor(const RowMapType &row_map_, const EntriesType &entries_, const ValuesType &values_, LHSType &lhs_, const RHSType &rhs_, const NGBLType &nodes_grouped_by_level_, const bool is_lowertri_, long node_count_, long node_groups_ = 0, long dense_nrows_ = 0) :
+    row_map(row_map_), entries(entries_), values(values_), lhs(lhs_), rhs(rhs_), nodes_grouped_by_level(nodes_grouped_by_level_), is_lowertri(is_lowertri_), node_count(node_count_), node_groups(node_groups_), dense_nrows(dense_nrows_) {}
+
+
+  KOKKOS_INLINE_FUNCTION
+  void operator()(const member_type & team) const {
+        auto my_league = team.league_rank(); // map to rowid
+
+        size_t nrows = row_map.extent(0) - 1;
+
+        Kokkos::parallel_for( Kokkos::TeamThreadRange( team, 0, node_groups ), [&] ( const long ng ) {
+          auto rowid = nodes_grouped_by_level(node_count + my_league*node_groups + ng);
+          if ( size_t(rowid) < nrows ) {
+
+            auto soffset = row_map(rowid);
+            auto eoffset = row_map(rowid+1);
+            auto rhs_rowid = rhs(rowid);
+            scalar_t diff = scalar_t(0.0);
+
+            Kokkos::parallel_reduce( Kokkos::ThreadVectorRange( team, soffset, eoffset ), [&] ( const long ptr, scalar_t &tdiff ) {
+              //auto colid = entries(ptr);
+
+#ifdef DENSEPARTITION
+              auto original_col = entries(ptr);
+              //auto colid = original_col - dense_nrows; //shift required for upper-tri
+              auto colid = is_lowertri ? original_col : original_col - dense_nrows; //shift required for upper-tri
+#else
+              auto colid = entries(ptr);
+#endif
+
+              auto val   = values(ptr);
+              if ( colid != rowid ) {
+                tdiff = tdiff - val*lhs(colid);
+              }
+            }, diff );
+
+            // ASSUMPTION: sorted diagonal value located at eoffset - 1
+            lhs(rowid) = is_lowertri ? (rhs_rowid+diff)/values(eoffset-1) : (rhs_rowid+diff)/values(soffset);
+          } // end if
+        }); // end TeamThreadRange
+
+        team.team_barrier();
+  }
+
+  KOKKOS_INLINE_FUNCTION
+  void operator()(const UnsortedTag&, const member_type & team) const {
+        auto my_league = team.league_rank(); // map to rowid
+
+        size_t nrows = row_map.extent(0) - 1;
+
+        Kokkos::parallel_for( Kokkos::TeamThreadRange( team, 0, node_groups ), [&] ( const long ng ) {
+          auto rowid = nodes_grouped_by_level(node_count + my_league*node_groups + ng);
+          if ( size_t(rowid) < nrows ) {
+            auto soffset = row_map(rowid);
+            auto eoffset = row_map(rowid+1);
+            auto rhs_rowid = rhs(rowid);
+            scalar_t diff = scalar_t(0.0);
+
+            auto diag = -1;
+            Kokkos::parallel_reduce( Kokkos::ThreadVectorRange( team, soffset, eoffset ), [&] ( const long ptr, scalar_t &tdiff ) {
+              //auto colid = entries(ptr);
+#ifdef DENSEPARTITION
+              auto original_col = entries(ptr);
+              //auto colid = original_col - dense_nrows; //shift required for upper-tri
+              auto colid = is_lowertri ? original_col : original_col - dense_nrows; //shift required for upper-tri
+#else
+              auto colid = entries(ptr);
+#endif
+              auto val   = values(ptr);
+              if ( colid != rowid ) {
+                tdiff = tdiff - val*lhs(colid);
+              }
+              else {
+                diag = ptr;
+              }
+            }, diff );
+
+            lhs(rowid) = (rhs_rowid+diff)/values(diag);
+          } // end if
+        }); // end TeamThreadRange
+
+        team.team_barrier();
+  }
+};
 
 // --------------------------------
 // Single-block functors
@@ -1364,7 +1475,7 @@ cudaProfilerStart();
 
         int team_size = thandle.get_team_size();
         if ( team_size == -1 ) {
-          team_size = std::is_same< typename Kokkos::DefaultExecutionSpace::memory_space, Kokkos::HostSpace >::value ? 1 : 128;
+          team_size = std::is_same< typename Kokkos::DefaultExecutionSpace::memory_space, Kokkos::HostSpace >::value ? 1 : 64;
         }
         int vector_size = thandle.get_team_size();
         if ( vector_size == -1 ) {
@@ -1375,7 +1486,8 @@ cudaProfilerStart();
         //       TeamThreadRange over number nodes of node_groups
         //       To avoid masking threads, 1 thread (team) per node in node_group (thread has full ownership of a node)
         //       ThreadVectorRange responsible for the actual solve computation
-        const int node_groups = team_size;
+        //const int node_groups = team_size;
+        const int node_groups = vector_size;
 
         LowerTriLvlSchedTP2SolverFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, node_count, node_groups);
         Kokkos::parallel_for("parfor_u_team_vector", tvt_policy_type( (int)std::ceil((float)lvl_nodes/(float)node_groups) , team_size, vector_size ), tstf);
@@ -1479,7 +1591,7 @@ cudaProfilerStart();
 
         int team_size = thandle.get_team_size();
         if ( team_size == -1 ) {
-          team_size = std::is_same< typename Kokkos::DefaultExecutionSpace::memory_space, Kokkos::HostSpace >::value ? 1 : 128;
+          team_size = std::is_same< typename Kokkos::DefaultExecutionSpace::memory_space, Kokkos::HostSpace >::value ? 1 : 64;
         }
         int vector_size = thandle.get_team_size();
         if ( vector_size == -1 ) {
@@ -1490,7 +1602,8 @@ cudaProfilerStart();
         //       TeamThreadRange over number nodes of node_groups
         //       To avoid masking threads, 1 thread (team) per node in node_group (thread has full ownership of a node)
         //       ThreadVectorRange responsible for the actual solve computation
-        const int node_groups = team_size;
+        //const int node_groups = team_size;
+        const int node_groups = vector_size;
 
         UpperTriLvlSchedTP2SolverFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, node_count, node_groups);
         Kokkos::parallel_for("parfor_u_team_vector", tvt_policy_type( (int)std::ceil((float)lvl_nodes/(float)node_groups) , team_size, vector_size ), tstf);
@@ -1864,6 +1977,8 @@ cudaProfilerStart();
         if (is_lowertri) {
           // TODO Time changes between merged functor and individuals
           //LowerTriLvlSchedTP1SolverFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, node_count);
+         if (thandle.get_algorithm() == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_DENSEP_TP1)
+         {
 #ifdef USEDIAGVALUES
           TriLvlSchedTP1SolverFunctorDiagValues<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, diagonal_values, true, node_count, dense_nrows);
 #else
@@ -1874,9 +1989,29 @@ cudaProfilerStart();
             Kokkos::parallel_for("parfor_l_team_chain1autodense", policy_type( lvl_nodes , Kokkos::AUTO ), tstf);
           else
             Kokkos::parallel_for("parfor_l_team_chain1dense", policy_type( lvl_nodes , team_size ), tstf);
+         }
+         else if (thandle.get_algorithm() == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_DENSEP_TP2)
+         {
+
+           //int team_size = thandle.get_team_size();
+           if ( team_size == -1 ) {
+             team_size = std::is_same< typename Kokkos::DefaultExecutionSpace::memory_space, Kokkos::HostSpace >::value ? 1 : 64;
+           }
+           int vector_size = thandle.get_team_size();
+           if ( vector_size == -1 ) {
+             vector_size = std::is_same< typename Kokkos::DefaultExecutionSpace::memory_space, Kokkos::HostSpace >::value ? 1 : 4;
+           }
+
+           TriLvlSchedTP2SolverFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, true, node_count, vector_size, dense_nrows);
+
+           const int num_teams = (int)std::ceil((float)lvl_nodes/(float)vector_size);
+           Kokkos::parallel_for("parfor_l_team_chaindense_tp2", policy_type( num_teams, team_size , vector_size ), tstf);
+         }
         }
         else {
           //UpperTriLvlSchedTP1SolverFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, node_count);
+         if (thandle.get_algorithm() == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_DENSEP_TP1)
+         {
 #ifdef USEDIAGVALUES
           TriLvlSchedTP1SolverFunctorDiagValues<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, diagonal_values, false, node_count, dense_nrows);
 #else
@@ -1887,6 +2022,24 @@ cudaProfilerStart();
             Kokkos::parallel_for("parfor_u_team_chain1autodense", policy_type( lvl_nodes , Kokkos::AUTO ), tstf);
           else
             Kokkos::parallel_for("parfor_u_team_chain1dense", policy_type( lvl_nodes , team_size ), tstf);
+         }
+         else if (thandle.get_algorithm() == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_DENSEP_TP2)
+         {
+
+           //int team_size = thandle.get_team_size();
+           if ( team_size == -1 ) {
+             team_size = std::is_same< typename Kokkos::DefaultExecutionSpace::memory_space, Kokkos::HostSpace >::value ? 1 : 64;
+           }
+           int vector_size = thandle.get_team_size();
+           if ( vector_size == -1 ) {
+             vector_size = std::is_same< typename Kokkos::DefaultExecutionSpace::memory_space, Kokkos::HostSpace >::value ? 1 : 4;
+           }
+
+           TriLvlSchedTP2SolverFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, false, node_count, vector_size, dense_nrows);
+
+           const int num_teams = (int)std::ceil((float)lvl_nodes/(float)vector_size);
+           Kokkos::parallel_for("parfor_u_team_chaindense_tp2", policy_type( num_teams, team_size , vector_size ), tstf);
+         }
         }
 #if defined(KOKKOS_ENABLE_CUDA) && defined(KOKKOSPSTRSV_SOLVE_IMPL_PROFILE)
 cudaProfilerStop();
@@ -1941,46 +2094,58 @@ cudaProfilerStart();
           if (cutoff <= team_size) {
 //          LowerTriLvlSchedTP1SingleBlockFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, nodes_per_level, node_count, schain, echain);
 
+           //if (thandle.get_algorithm() == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_DENSEP_TP1)
+           {
 #ifdef USEDIAGVALUES
             TriLvlSchedTP1SingleBlockFunctorDiagValues<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, nodes_per_level, diagonal_values, node_count, schain, echain, true, dense_nrows);
 #else
             TriLvlSchedTP1SingleBlockFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, nodes_per_level, node_count, schain, echain, true, dense_nrows);
 #endif
             Kokkos::parallel_for("parfor_l_team_chainmulti", policy_type( 1, team_size ), tstf);
+           }
           }
           else {
             // team_size < cutoff => kernel must allow for a block-stride internally
 //          LowerTriLvlSchedTP1SingleBlockFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, nodes_per_level, node_count, schain, echain);
 
+           //if (thandle.get_algorithm() == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_DENSEP_TP1)
+           {
 #ifdef USEDIAGVALUES
             TriLvlSchedTP1SingleBlockFunctorDiagValues<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, nodes_per_level, diagonal_values, node_count, schain, echain, true, dense_nrows, cutoff);
 #else
             TriLvlSchedTP1SingleBlockFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, nodes_per_level, node_count, schain, echain, true, dense_nrows, cutoff);
 #endif
             Kokkos::parallel_for("parfor_l_team_chainmulti_cutoff", large_cutoff_policy_type( 1, team_size ), tstf);
+           }
           }
         }
         else {
           if (cutoff <= team_size) {
 //          UpperTriLvlSchedTP1SingleBlockFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, nodes_per_level, node_count, schain, echain);
 
+           //if (thandle.get_algorithm() == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_DENSEP_TP1)
+           {
 #ifdef USEDIAGVALUES
             TriLvlSchedTP1SingleBlockFunctorDiagValues<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, nodes_per_level, diagonal_values, node_count, schain, echain, false, dense_nrows);
 #else
             TriLvlSchedTP1SingleBlockFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, nodes_per_level, node_count, schain, echain, false, dense_nrows);
 #endif
             Kokkos::parallel_for("parfor_u_team_chainmulti", policy_type( 1, team_size ), tstf);
+           }
           }
           else {
             // team_size < cutoff => kernel must allow for a block-stride internally
 //          UpperTriLvlSchedTP1SingleBlockFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, nodes_per_level, node_count, schain, echain);
 
+           //if (thandle.get_algorithm() == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_DENSEP_TP1)
+           {
 #ifdef USEDIAGVALUES
             TriLvlSchedTP1SingleBlockFunctorDiagValues<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, nodes_per_level, diagonal_values, node_count, schain, echain, false, dense_nrows, cutoff);
 #else
             TriLvlSchedTP1SingleBlockFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, nodes_per_level, node_count, schain, echain, false, dense_nrows, cutoff);
 #endif
             Kokkos::parallel_for("parfor_u_team_chainmulti_cutoff", large_cutoff_policy_type( 1, team_size ), tstf);
+           }
           }
         }
 
@@ -2013,7 +2178,9 @@ cudaProfilerStop();
      // fenced solve time
      auto tmptime = timer_wrap_ifelse.seconds();
      time_wrapped_ifelse += tmptime;
+  #ifdef TRISOLVE_TIMERS_ITER_OUTPUT
      std::cout << "    time iter: " << tp1_ctr << "  chain_ctr: " << chain_ctr << "  time: " << tmptime << std::endl;
+  #endif
      //time_wrapped_ifelse += timer_wrap_ifelse.seconds();
   #endif
   } // end for chainlink

@@ -126,7 +126,9 @@ struct SPTRSV_SYMBOLIC<KernelHandle, RowMapType, EntriesType, false, KOKKOSKERNE
     auto sptrsv_handle = handle->get_sptrsv_handle();
 
 #ifdef DENSEPARTITION
-    if ( sptrsv_handle->get_algorithm() == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_DENSEP_TP1 ) {
+    if ( sptrsv_handle->get_algorithm() == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_DENSEP_TP1 
+        || sptrsv_handle->get_algorithm() == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_DENSEP_TP2
+       ) {
       Experimental::symbolic_dense_partition_algm(*sptrsv_handle, row_map, entries);
       sptrsv_handle->set_symbolic_complete();
     } else {
