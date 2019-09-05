@@ -56,6 +56,8 @@
 //#define CHAIN_LVL_OUTPUT_INFO
 //#define PRINT1DVIEWSSYMB
 //#define DEBUGSYMBDENSE
+#define SYMB_DIAG_CHECK
+//#define SYMB_INIT_ASSUME_LVL
 
 // TODO Pass values array and store diagonal entries - should this always be done or optional?
 
@@ -229,6 +231,12 @@ void lower_tri_symbolic (TriSolveHandle &thandle, const RowMapType drow_map, con
   // diagonal_offsets is uninitialized - deep_copy unnecessary at the beginning, only needed at the end
   auto hdiagonal_offsets = Kokkos::create_mirror_view(diagonal_offsets);
 
+  size_type level = 0;
+
+#ifdef SYMB_DIAG_CHECK
+  long diag_ctr = 0;
+#endif
+
 #ifdef DENSEPARTITION
   //auto starting_node = thandle.get_lvlsched_node_start();
   //auto ending_node = thandle.get_lvlsched_node_end();
@@ -239,18 +247,26 @@ void lower_tri_symbolic (TriSolveHandle &thandle, const RowMapType drow_map, con
   auto ending_node = nrows;
 #endif
 
-  size_type level = 0;
-  // node 0 is trivially independent in lower tri solve, start with it in level 0
   // FIXME Change this to allow for partitioned sparse mtx
+#ifdef SYMB_INIT_ASSUME_LVL
+  // node 0 is trivially independent in lower tri solve, start with it in level 0
   level_list(starting_node) = level;
   size_type node_count = 1; //lower tri: starting with node 0 already in level 0
 
   nodes_per_level(0) = 1;
   nodes_grouped_by_level(0) = starting_node;
+  hdiagonal_offsets(starting_node) = starting_node; //FIXME Add to upper impl
+#else
+  size_type node_count = 0;
+#endif
 
   while (node_count < nrows) {
 
+#ifdef SYMB_INIT_ASSUME_LVL
     for ( size_type row = starting_node+1; row < ending_node; ++row ) { // row 0 already included
+#else
+    for ( size_type row = starting_node; row < ending_node; ++row ) {
+#endif
       if ( level_list(row) == -1 ) { // unmarked
         bool is_root = true;
         signed_integral_t ptrstart = row_map(row);
@@ -271,6 +287,10 @@ void lower_tri_symbolic (TriSolveHandle &thandle, const RowMapType drow_map, con
             //TODO possibly store/sort in same order as the nodes in the level_list
             //TODO Maybe run FULL check the first round through without breaking in upper if statement...
             hdiagonal_offsets(row) = offset;
+#ifdef SYMB_DIAG_CHECK
+            ++diag_ctr;
+            // FIXME: The starting_node index is skipped, must be manually included
+#endif
           }
           else if ( col > row ) {
             std::cout << "SYMB ERROR: Lower tri with colid > rowid - SHOULD NOT HAPPEN!!!";
@@ -299,6 +319,9 @@ void lower_tri_symbolic (TriSolveHandle &thandle, const RowMapType drow_map, con
   } // end while
 
   thandle.set_num_levels(level);
+#ifdef SYMB_DIAG_CHECK
+    std::cout << "  SYMB: diag_ctr = " << diag_ctr << "  nrows = " << nrows << std::endl;
+#endif
 
   // Create the chain now
   if ( thandle.algm_requires_symb_chain() ) {
@@ -330,6 +353,7 @@ void lower_tri_symbolic (TriSolveHandle &thandle, const RowMapType drow_map, con
   Kokkos::deep_copy(dlevel_list, level_list);
   Kokkos::deep_copy(diagonal_offsets, hdiagonal_offsets);
  }
+
 #ifdef TRISOLVE_SYMB_TIMERS
  std::cout << "  Symbolic (lower tri) Total Time: " << timer_sym_lowertri_total.seconds() << std::endl;;
 #endif
@@ -393,7 +417,6 @@ void upper_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, co
   // diagonal_offsets is uninitialized - deep_copy unnecessary at the beginning, only needed at the end
   auto hdiagonal_offsets = Kokkos::create_mirror_view(diagonal_offsets);
 
-  // final row is trivially independent in upper tri solve, start with it in level 0
   size_type level = 0;
   // FIXME: starting_node only holds for FULL matrix, not the sparse partition in different algorithm
   // Depending on algorithm, can be nrows - 1 vs dense_start_row - 1
@@ -411,15 +434,24 @@ void upper_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, co
   std::cout << "  upper_tri_symbolic debug: " << std::endl;
   std::cout << "  starting_node = " << starting_node << "  ending_node = " << ending_node << "  nrows = " << nrows << std::endl;
 
+#ifdef SYMB_INIT_ASSUME_LVL
+  // final row is trivially independent in upper tri solve, start with it in level 0
   level_list(starting_node) = level;
   size_type node_count = 1; //upper tri: starting with node n already in level 0
 
   nodes_per_level(0) = 1;
   nodes_grouped_by_level(0) = starting_node;
+#else
+  size_type node_count = 0;
+#endif
 
   while (node_count < nrows) {
 
+#ifdef SYMB_INIT_ASSUME_LVL
     for ( signed_integral_t row = starting_node-1; row >= ending_node; --row ) { // row 0 already included
+#else
+    for ( signed_integral_t row = starting_node; row >= ending_node; --row ) {
+#endif
       if ( level_list(row) == -1 ) { // unmarked
         bool is_root = true;
         signed_integral_t ptrstart = row_map(row);
@@ -474,9 +506,9 @@ void upper_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, co
   thandle.set_num_levels(level);
 
   // Create the chain now
- if ( thandle.algm_requires_symb_chain() ) {
-   symbolic_chain_phase(thandle, nodes_per_level);
- }
+  if ( thandle.algm_requires_symb_chain() ) {
+    symbolic_chain_phase(thandle, nodes_per_level);
+  }
 
   // Output check
 #ifdef LVL_OUTPUT_INFO
@@ -500,6 +532,7 @@ void upper_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, co
   Kokkos::deep_copy(dlevel_list, level_list);
   Kokkos::deep_copy(diagonal_offsets, hdiagonal_offsets);
  }
+
 #ifdef TRISOLVE_SYMB_TIMERS
  std::cout << "  Symbolic (upper tri) Total Time: " << timer_sym_uppertri_total.seconds() << std::endl;;
 #endif
@@ -604,8 +637,8 @@ void symbolic_dense_partition_algm( TriSolveHandle &thandle, const RowMapType dr
   Kokkos::fence();
 
 #ifdef PRINT1DVIEWSSYMB
-std::cout << "  Freq count row_map_rectspmtx" << std::endl;
-print_view1d_symbolic(row_map_rectspmtx);
+  std::cout << "  Freq count row_map_rectspmtx" << std::endl;
+  print_view1d_symbolic(row_map_rectspmtx);
 #endif
 
   // Convert count of indices in rectspmtx to a row_map
@@ -620,8 +653,8 @@ print_view1d_symbolic(row_map_rectspmtx);
   Kokkos::fence();
 
 #ifdef PRINT1DVIEWSSYMB
-std::cout << "  Post-scan row_map_rectspmtx" << std::endl;
-print_view1d_symbolic(row_map_rectspmtx);
+  std::cout << "  Post-scan row_map_rectspmtx" << std::endl;
+  print_view1d_symbolic(row_map_rectspmtx);
 #endif
 
   thandle.set_nnz_rectspmtx(rectspmtx_nnz);
@@ -770,6 +803,19 @@ void numeric_dense_partition_algm(TriSolveHandle &thandle, const RowMapType drow
     }
   }
 #endif
+
+  auto diagonal_values = thandle.get_diagonal_values();
+  auto diagonal_offsets = thandle.get_diagonal_offsets();
+  if (diagonal_values.extent(0) != diagonal_offsets.extent(0)) {
+    //std::cout << "ERROR: diagonal_values different size than diagonal_offsets" << std::endl;
+    throw std::runtime_error ("  numeric error: diagonal_values different size than diagonal_offsets");
+  }
+  Kokkos::parallel_for("Store diagonal entries by rowid", Kokkos::RangePolicy<Kokkos::DefaultExecutionSpace>(0, diagonal_offsets.extent(0)), 
+    KOKKOS_LAMBDA ( const size_type i ) {
+      diagonal_values(i) = dvalues(diagonal_offsets(i));
+    });
+  Kokkos::fence();
+
 
   std::cout << "  numeric complete" << std::endl;
 

@@ -130,6 +130,7 @@ private:
 
   // TODO Store diagonal offsets
   nnz_lno_view_t diagonal_offsets;
+  nnz_scalar_view_t diagonal_values; // inserted by rowid
 
   // Symbolic: Single-block chain data
   host_signed_nnz_lno_view_t h_chain_ptr;
@@ -252,6 +253,7 @@ public:
     team_size(-1),
     vector_size(-1),
     diagonal_offsets(),
+    diagonal_values(), // inserted by rowid
     h_chain_ptr(),
     num_chain_entries(0),
     chain_threshold(-1),
@@ -396,16 +398,16 @@ public:
       // Fixed - created a function to return correct value, this else-if routine can take over
       std::cout << "  init_handle: level schedule allocs dense_partition" << std::endl;
       // FIXME!!!!!! This allocs level_list before user-provided nrows is set...
-      std::cout << "    sptrimtx_nrows = " << get_persist_sptrimtx_nrows() << std::endl;
+      std::cout << "    sptrimtx_nrows = " << get_persist_sptrimtx_nrows_handle() << std::endl;
       set_num_levels(0);
-      level_list = signed_nnz_lno_view_t(Kokkos::ViewAllocateWithoutInitializing("level_list"), get_persist_sptrimtx_nrows() );
+      level_list = signed_nnz_lno_view_t(Kokkos::ViewAllocateWithoutInitializing("level_list"), get_persist_sptrimtx_nrows_handle() );
       Kokkos::deep_copy( level_list, signed_integral_t(-1) );
       std::cout << "    init_handle: level_list.extent(0) = " << level_list.extent(0) << std::endl;
-      nodes_per_level =  nnz_lno_view_t("nodes_per_level", get_persist_sptrimtx_nrows() );
+      nodes_per_level =  nnz_lno_view_t("nodes_per_level", get_persist_sptrimtx_nrows_handle() );
       hnodes_per_level = Kokkos::create_mirror_view(nodes_per_level);
       std::cout << "    init_handle: nodes_per_level.extent(0) = " << nodes_per_level.extent(0) << std::endl;
       std::cout << "    init_handle: hnodes_per_level.extent(0) = " << hnodes_per_level.extent(0) << std::endl;
-      nodes_grouped_by_level = nnz_lno_view_t("nodes_grouped_by_level", get_persist_sptrimtx_nrows() );
+      nodes_grouped_by_level = nnz_lno_view_t("nodes_grouped_by_level", get_persist_sptrimtx_nrows_handle() );
       hnodes_grouped_by_level = Kokkos::create_mirror_view(nodes_grouped_by_level);
       std::cout << "    init_handle: nodes_grouped_by_level.extent(0) = " << nodes_grouped_by_level.extent(0) << std::endl;
       std::cout << "    init_handle: hnodes_grouped_by_level.extent(0) = " << hnodes_grouped_by_level.extent(0) << std::endl;
@@ -414,6 +416,7 @@ public:
 
     // TODO Incorporate usage of this data into the algorithms
     diagonal_offsets = nnz_lno_view_t(Kokkos::ViewAllocateWithoutInitializing("diagonal_offsets"), nrows_);
+    diagonal_values = nnz_scalar_view_t(Kokkos::ViewAllocateWithoutInitializing("diagonal_values"), nrows_); // inserted by rowid
 
 #ifdef DENSEPARTITION
     if (this->require_symbolic_chain_phase == true && this->require_symbolic_numeric_dense_phase == false )
@@ -465,29 +468,29 @@ public:
         // 0: Every level, regardless of number of nodes, is launched within a kernel
         if (team_size == -1) {
           this->chain_threshold = 0; 
-          h_chain_ptr = host_signed_nnz_lno_view_t("h_chain_ptr", get_persist_sptrimtx_nrows() );
+          h_chain_ptr = host_signed_nnz_lno_view_t("h_chain_ptr", get_persist_sptrimtx_nrows_handle() );
         }
         else {
           std::cout << "  Warning: chain_threshold was not set - will default to team_size = " << this->team_size << "  chain_threshold = " << this->chain_threshold << std::endl;
           this->chain_threshold = this->team_size; 
-          h_chain_ptr = host_signed_nnz_lno_view_t("h_chain_ptr", get_persist_sptrimtx_nrows() );
+          h_chain_ptr = host_signed_nnz_lno_view_t("h_chain_ptr", get_persist_sptrimtx_nrows_handle() );
         }
       }
       else {
         // FIXME Compare threshold with team_size limit - either error or automatically adjust if incompatible
         if (this->team_size >= this->chain_threshold) {
-          h_chain_ptr = host_signed_nnz_lno_view_t("h_chain_ptr", get_persist_sptrimtx_nrows() );
+          h_chain_ptr = host_signed_nnz_lno_view_t("h_chain_ptr", get_persist_sptrimtx_nrows_handle() );
         }
         else if (this->team_size == -1) {
           std::cout << "  Warning: team_size was not set  team_size = " << this->team_size << "  chain_threshold = " << this->chain_threshold << std::endl;
           std::cout << "  Automatically setting team_size to chain_threshold - if this exceeds the hardware limitation a runtime error will occur during kernel launch - reduce chain_threshold in that case" << std::endl;
           this->team_size = this->chain_threshold;
-          h_chain_ptr = host_signed_nnz_lno_view_t("h_chain_ptr", get_persist_sptrimtx_nrows() );
+          h_chain_ptr = host_signed_nnz_lno_view_t("h_chain_ptr", get_persist_sptrimtx_nrows_handle() );
         }
         else {
           // TODO Must set team_size when using chain - or should it be automatically set to chain_threshold?
           std::cout << "  EXPERIMENTAL: team_size < chain_size: team_size = " << this->team_size << "  chain_threshold = " << this->chain_threshold << std::endl;
-          h_chain_ptr = host_signed_nnz_lno_view_t("h_chain_ptr", get_persist_sptrimtx_nrows() );
+          h_chain_ptr = host_signed_nnz_lno_view_t("h_chain_ptr", get_persist_sptrimtx_nrows_handle() );
           //std::cout << "  Error: team_size = " << this->team_size << "  chain_threshold = " << this->chain_threshold << std::endl;
           //throw std::runtime_error ("  sptrsv_handle.init_handle error: chain_threshold > team_size - this is an invalid pair of values for this algorithm");
         }
@@ -538,6 +541,9 @@ public:
 
   KOKKOS_INLINE_FUNCTION
   nnz_lno_view_t get_diagonal_offsets() const { return diagonal_offsets; }
+
+  KOKKOS_INLINE_FUNCTION
+  nnz_scalar_view_t get_diagonal_values() const { return diagonal_values; }
 
   inline
   host_signed_nnz_lno_view_t get_host_chain_ptr() const { return h_chain_ptr; }
@@ -630,12 +636,14 @@ public:
   KOKKOS_INLINE_FUNCTION
   size_type get_persist_sptrimtx_row_start() const { return lower_tri ? size_type(0) : dense_partition_nrows; }
 
+  // FIXME - code changes in the handle calling this routine resulted in buggy behavior due to allocating scheduling components prior to user-defined dense partition size
+  //         that part of the code needs to be revised, but the routine below is effectively useless for now
   KOKKOS_INLINE_FUNCTION
-  size_type get_persist_sptrimtx_nrows() const { return nrows; }
-  //size_type get_persist_sptrimtx_nrows() const { return require_symbolic_numeric_dense_phase ? (nrows - dense_partition_nrows) : nrows; }
+  size_type get_persist_sptrimtx_nrows_handle() const { return nrows; }
+  //size_type get_persist_sptrimtx_nrows_handle() const { return require_symbolic_numeric_dense_phase ? (nrows - dense_partition_nrows) : nrows; }
 
   KOKKOS_INLINE_FUNCTION
-  size_type get_persist_sptrimtx_nrows_solve() const { return require_symbolic_numeric_dense_phase ? (nrows - dense_partition_nrows) : nrows; }
+  size_type get_persist_sptrimtx_nrows() const { return require_symbolic_numeric_dense_phase ? (nrows - dense_partition_nrows) : nrows; }
 
   // Needed for the solve phase
   KOKKOS_INLINE_FUNCTION
