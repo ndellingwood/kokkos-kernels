@@ -286,59 +286,6 @@ public:
 #endif
   }
 
-#if 0
-  SPTRSVHandle ( SPTRSVAlgorithm choice, const size_type nrows_, bool lower_tri_, bool symbolic_complete_ = false ) :
-    level_list( Kokkos::ViewAllocateWithoutInitializing("level_list"), nrows),
-    nodes_per_level("nodes_per_level", nrows),
-    nodes_grouped_by_level("nodes_grouped_by_level", nrows),
-    nrows(nrows_),
-    nlevel(0),
-    lower_tri( lower_tri_ ),
-    symbolic_complete( symbolic_complete_ ),
-    algm(choice)
-  {
-    // WithoutInitializing
-    Kokkos::deep_copy( level_list, signed_integral_t(-1) );
-  }
-
-/*
-  template <class rhslno_row_view_t_,
-            class rhslno_nnz_view_t_,
-            class rhsscalar_nnz_view_t_,
-            class rhsExecutionSpace,
-            class rhsMemorySpace>
-  SPTRSVHandle ( SPTRSVHandle< rhslno_row_view_t_, rhslno_nnz_view_t_, rhsscalar_nnz_view_t_, rhsExecutionSpace, rhsMemorySpace > & rhs ) {
-
-    this->level_list = rhs.level_list;
-    this->nodes_per_level = rhs.nodes_per_level;
-    this->nodes_grouped_by_level = rhs.nodes_grouped_by_level;
-    this->nrows = rhs.nrows;
-    this->nlevel = rhs.nlevel;
-    this->lower_tri = rhs.lower_tri;
-    this->symbolic_complete = rhs.symbolic_complete;
-    this->algm = rhs.algm;
-  }
-
-  template <class rhslno_row_view_t_,
-            class rhslno_nnz_view_t_,
-            class rhsscalar_nnz_view_t_,
-            class rhsExecutionSpace,
-            class rhsMemorySpace>
-  SPTRSVHandle & operator= ( SPTRSVHandle< rhslno_row_view_t_, rhslno_nnz_view_t_, rhsscalar_nnz_view_t_, rhsExecutionSpace, rhsMemorySpace > & rhs ) {
-
-    this->level_list = rhs.level_list;
-    this->nodes_per_level = rhs.nodes_per_level;
-    this->nodes_grouped_by_level = rhs.nodes_grouped_by_level;
-    this->nrows = rhs.nrows;
-    this->nlevel = rhs.nlevel;
-    this->lower_tri = rhs.lower_tri;
-    this->symbolic_complete = rhs.symbolic_complete;
-    this->algm = rhs.algm;
-    return *this;
-  }
-*/
-
-#endif
 
   void init_handle(const size_type nrows_) {
     //set_nrows(nrows_);
@@ -511,6 +458,114 @@ public:
   }
 
 
+
+  // Requires nrows_ input
+  // Sets: 
+  // Allocates all views
+  void new_init_handle(const size_type nrows_) {
+    //set_nrows(nrows_);
+    nrows = nrows_;
+
+    // Assumed that level scheduling occurs during symbolic phase for all algorithms, for now
+#ifdef DENSEPARTITION
+    if ( this->require_symbolic_numeric_dense_phase == true ) {
+      // This will set the dense_partition_nrows and dense_partition_row_start
+      // From here, row start and nrows is known for each component - persist_sptrimtx, rect_spmtx, dense_trimtx
+      std::cout << "  init_handle: dense allocs" << std::endl;
+
+      if (auto_set_dense_partition_percent == true) {
+        // The row start will depend on whether matrix is upper vs lower tri
+        dense_partition_row_percent = 0.01; // Auto-set for now, will override if user provides a value
+        dense_partition_nrows = dense_partition_row_percent*nrows;
+        std::cout << "  At handle init assume 1% dense_partition_nrows = " << dense_partition_nrows << std::endl;
+      }
+      else {
+        // FIXME: The interface doesn't allow this to happen since the handle must be constructed before the percent can be set
+        dense_partition_nrows = dense_partition_row_percent*nrows;
+        std::cout << "  User provided dense_partition_nrows = " << dense_partition_nrows << std::endl;
+      }
+      dense_partition_row_start = lower_tri ? (nrows - dense_partition_nrows) : 0;
+      std::cout << "  nrows = " << nrows << std::endl;
+      std::cout << "  User resultant dense_partition_nrows = " << dense_partition_nrows << std::endl;
+      std::cout << "  User resultant dense_row_start = " << dense_partition_row_start << std::endl;
+
+       // Lower
+       // [0, dense_partition_row_start) sparse;  [dense_partition_row_start, nrows) dense, but map to [0,nrows-dense_partition_row_start)
+       //
+       // Upper
+       // [dense_partition_row_start, nrows) sparse;  [0, dense_partition_nrows) dense, but map to [0,nrows-dense_partition_row_start)
+
+      numeric_complete = false;
+    }
+    else {
+      dense_trimtx= mtx_scalar_view_t();
+      numeric_complete = false;
+    }
+#endif
+
+    // TODO: Set sizes differently/smaller, resize during symbolic if out of room
+    if ( this->require_symbolic_lvlsched_phase == true )
+    {
+      std::cout << "  init_handle: level schedule allocs" << std::endl;
+      set_num_levels(0);
+      level_list = signed_nnz_lno_view_t(Kokkos::ViewAllocateWithoutInitializing("level_list"), nrows_);
+      Kokkos::deep_copy( level_list, signed_integral_t(-1) );
+      nodes_per_level =  nnz_lno_view_t("nodes_per_level", nrows_);
+      hnodes_per_level = Kokkos::create_mirror_view(nodes_per_level);
+      nodes_grouped_by_level = nnz_lno_view_t("nodes_grouped_by_level", nrows_);
+      hnodes_grouped_by_level = Kokkos::create_mirror_view(nodes_grouped_by_level);
+    }
+
+    // TODO Incorporate usage of this data into the algorithms
+    diagonal_offsets = nnz_lno_view_t(Kokkos::ViewAllocateWithoutInitializing("diagonal_offsets"), nrows_);
+    diagonal_values = nnz_scalar_view_t(Kokkos::ViewAllocateWithoutInitializing("diagonal_values"), nrows_); // inserted by rowid
+
+    if (this->require_symbolic_chain_phase == true)
+    {
+      std::cout << "  new_init_handle: chain ptr allocs" << std::endl;
+      if (this->chain_threshold == -1) {
+        // Need default if chain_threshold not set
+        // 0: Every level, regardless of number of nodes, is launched within a kernel
+        if (team_size == -1) {
+          this->chain_threshold = 0; 
+          h_chain_ptr = host_signed_nnz_lno_view_t("h_chain_ptr", this->nrows);
+        }
+        else {
+          std::cout << "  Warning: chain_threshold was not set - will default to team_size = " << this->team_size << "  chain_threshold = " << this->chain_threshold << std::endl;
+          this->chain_threshold = this->team_size; 
+          h_chain_ptr = host_signed_nnz_lno_view_t("h_chain_ptr", this->nrows);
+        }
+      }
+      else {
+        // FIXME Compare threshold with team_size limit - either error or automatically adjust if incompatible
+        if (this->team_size >= this->chain_threshold) {
+          h_chain_ptr = host_signed_nnz_lno_view_t("h_chain_ptr", this->nrows);
+        }
+        else if (this->team_size == -1 && chain_threshold > 0) {
+          std::cout << "  Warning: team_size was not set  team_size = " << this->team_size << "  chain_threshold = " << this->chain_threshold << std::endl;
+          std::cout << "  Automatically setting team_size to chain_threshold - if this exceeds the hardware limitation a runtime error will occur during kernel launch - reduce chain_threshold in that case" << std::endl;
+          this->team_size = this->chain_threshold;
+          h_chain_ptr = host_signed_nnz_lno_view_t("h_chain_ptr", this->nrows);
+        }
+        else {
+          // TODO Must set team_size when using chain - or should it be automatically set to chain_threshold?
+          std::cout << "  EXPERIMENTAL: team_size < chain_size: team_size = " << this->team_size << "  chain_threshold = " << this->chain_threshold << std::endl;
+          h_chain_ptr = host_signed_nnz_lno_view_t("h_chain_ptr", this->nrows);
+          //std::cout << "  Error: team_size = " << this->team_size << "  chain_threshold = " << this->chain_threshold << std::endl;
+          //throw std::runtime_error ("  sptrsv_handle.init_handle error: chain_threshold > team_size - this is an invalid pair of values for this algorithm");
+        }
+      }
+    }
+    else {
+      h_chain_ptr = host_signed_nnz_lno_view_t();
+      this->chain_threshold = -1;
+    }
+    set_num_chain_entries(0);
+    set_symbolic_incomplete();
+  }
+
+
+
   virtual ~SPTRSVHandle() {};
 
   bool algm_requires_symb_lvlsched() const { return require_symbolic_lvlsched_phase; } 
@@ -526,6 +581,7 @@ public:
   void reset_algorithm(SPTRSVAlgorithm choice) { 
     if (algm != choice) {
       algm = choice; 
+      // FIXME - getting rid of init_handle for new_init_handle, different usage
       init_handle(nrows);
     }
   }
@@ -591,6 +647,7 @@ public:
 
   void alloc_values_rectspmtx(size_type dim) { values_rectspmtx = nnz_scalar_view_t("values_rectspmtx", dim); }
 
+  // Called by user at setup - should only set a value, no alloc
   inline
   void set_dense_partition_row_percent(const float rp) { 
     if (numeric_complete == false && symbolic_complete == false) {
@@ -731,6 +788,7 @@ public:
   
 #endif
 
+  // Called by user at setup - should only set a value, no alloc
   // FIXME This is only interface for setting the chain_threshold for now, but results in unnecessary realloc of h_chain_ptr
   void reset_chain_threshold(const signed_integral_t threshold) {
     // TODO Must check that team_size corresponding to chain_threshold is valid, but requires instantiating the kernel to get max_team_size
@@ -738,18 +796,18 @@ public:
     if (threshold != this->chain_threshold || h_chain_ptr.span() == 0) {
         this->chain_threshold = threshold;
         if (this->team_size >= this->chain_threshold) {
-          h_chain_ptr = host_signed_nnz_lno_view_t("h_chain_ptr", this->nrows);
+        //  h_chain_ptr = host_signed_nnz_lno_view_t("h_chain_ptr", this->nrows);
         }
-        else if (this->team_size == -1) {
+        else if (this->team_size == -1 && chain_threshold > 0) {
           std::cout << "  Warning: team_size was not set  team_size = " << this->team_size << "  chain_threshold = " << this->chain_threshold << std::endl;
           std::cout << "  Automatically setting team_size to chain_threshold - if this exceeds the hardware limitation a runtime error will occur during kernel launch - reduce chain_threshold in that case" << std::endl;
           this->team_size = this->chain_threshold;
-          h_chain_ptr = host_signed_nnz_lno_view_t("h_chain_ptr", this->nrows);
+        //  h_chain_ptr = host_signed_nnz_lno_view_t("h_chain_ptr", this->nrows);
         }
         else {
           // TODO Must set team_size when using chain - or should it be automatically set to chain_threshold?
           std::cout << "  EXPERIMENTAL: team_size < chain_size: team_size = " << this->team_size << "  chain_threshold = " << this->chain_threshold << std::endl;
-          h_chain_ptr = host_signed_nnz_lno_view_t("h_chain_ptr", this->nrows);
+        //  h_chain_ptr = host_signed_nnz_lno_view_t("h_chain_ptr", this->nrows);
           //std::cout << "  Error: team_size = " << this->team_size << "  chain_threshold = " << this->chain_threshold << std::endl;
           //throw std::runtime_error ("  sptrsv_handle.init_handle error: chain_threshold > team_size - this is an invalid pair of values for this algorithm");
         }
@@ -782,10 +840,12 @@ public:
 
   KOKKOS_INLINE_FUNCTION
   int get_team_size() const {return this->team_size;}
+  // Called by user at setup - should only set a value, no alloc
   void set_team_size(const int ts) {this->team_size = ts;}
 
   KOKKOS_INLINE_FUNCTION
   int get_vector_size() const {return this->vector_size;}
+  // Called by user at setup - should only set a value, no alloc
   void set_vector_size(const int vs) {this->vector_size = vs;}
 
   KOKKOS_INLINE_FUNCTION

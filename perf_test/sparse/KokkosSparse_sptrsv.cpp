@@ -64,6 +64,13 @@
 #include "KokkosSparse_CrsMatrix.hpp"
 #include <KokkosKernels_IOUtils.hpp>
 
+// Testing compilation with lapacke for dtrtri usage
+//#define KOKKOSKERNELS_SPTRSV_LAPACKE_TRSV
+
+#ifdef KOKKOSKERNELS_SPTRSV_LAPACKE_TRSV
+#include "lapacke.h"
+#endif
+
 //#define PRINTVIEWSSPTRSVPERF
 
 #if defined( KOKKOS_ENABLE_CXX11_DISPATCH_LAMBDA ) && (!defined(KOKKOS_ENABLE_CUDA) || ( 8000 <= CUDA_VERSION ))
@@ -267,6 +274,118 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
         if (team_size != -1) kh.get_sptrsv_handle()->set_team_size(team_size);
         kh.get_sptrsv_handle()->print_algorithm();
     }
+
+#ifdef KOKKOSKERNELS_SPTRSV_LAPACKE_TRSV
+    if (test==LVLSCHED_DENSEP_TP1 || test==LVLSCHED_DENSEP_TP2) {
+      // Extract dense triangle from matrix, copy to host for dtrtri
+
+      auto thandle = kh.get_sptrsv_handle();
+      auto dense_partition_nrows = thandle->get_dense_partition_nrows();
+
+      typedef Kokkos::View<scalar_t**, memory_space>     DenseTriType;
+      DenseTriType dense_trimtx("dense_trimtx", dense_partition_nrows, dense_partition_nrows);
+
+      auto dense_row_start = thandle->get_dense_partition_row_start();
+      auto trimtx_col_start = is_lower_tri ? dense_row_start : 0; // ends at nrows
+
+      auto dprow_map = Kokkos::subview( row_map, Kokkos::pair<size_type,size_type>(dense_row_start, dense_row_start+dense_partition_nrows+1) );
+
+    Kokkos::parallel_for("fill dense tri", Kokkos::RangePolicy<Kokkos::DefaultExecutionSpace>(0, dense_partition_nrows),
+    KOKKOS_LAMBDA (const size_type i) {
+      // Iterate over partition of original matrix to extract the indices in the rectangular sparse matrix partition
+      size_type offset_start = dprow_map(i);
+      size_type offset_end   = dprow_map(i+1);
+
+      //auto idx_count_this_row = row_map_rectspmtx(i+1) - row_map_rectspmtx(i);
+      //auto new_idx_offset = row_map_rectspmtx(i);
+
+      for (size_type offset = offset_start; offset < offset_end; ++offset) {
+        size_type colid = entries(offset);
+        auto val = values(offset);
+        // Count in-sparse-rect entries per row, store at row_map(rowid+1) in anticipation of followup scan
+        //if ( (is_lower_tri && colid < trimtx_col_start) || (!is_lower_tri && colid >= rectspmtx_col_start) )
+        if ( (is_lower_tri && colid < trimtx_col_start) )
+        {
+          //values_rectspmtx(new_idx_offset) = val;
+          //++new_idx_offset;
+        }
+        else {
+          auto trimtx_shifted_colid = is_lower_tri ? colid - trimtx_col_start : colid;
+          dense_trimtx(i, trimtx_shifted_colid) = val;
+        }
+      }
+
+    });
+    Kokkos::fence();
+
+    auto hdense_trimtx = Kokkos::create_mirror_view(dense_trimtx);
+    Kokkos::deep_copy(hdense_trimtx, dense_trimtx);
+
+    #ifdef PRINT_HLEVEL_FREQ_PLOT
+    // Print result to output file, check with Matlab
+    // Print the actual matrix
+     {
+      std::ofstream outfile;
+      outfile.open("L.txt");
+      if (outfile.is_open()) {
+        for ( size_t i = 0; i < hdense_trimtx.extent(0); ++i ) {
+          for ( size_t j = 0; j < hdense_trimtx.extent(1); ++j ) {
+            //outfile << i << " " << j << " " << hdense_trimtx(i,j) << std::endl;
+            if (j < hdense_trimtx.extent(1)-1) {
+              outfile << hdense_trimtx(i,j) << " ";
+            }
+            else {
+              outfile << hdense_trimtx(i,j) << std::endl;
+            }
+          }
+          //outfile << std::endl;
+        }
+        outfile.close();
+      }
+      else {
+        std::cout << "L OUTFILE DID NOT OPEN!!!" << std::endl;
+      }
+     }
+    #endif
+
+    // If hdense_trimtx is LayoutLeft
+//    LAPACKE_dtrtri(LAPACK_COL_MAJOR,
+//                  'L', 'N', (int)dense_partition_nrows, (scalar_t*)hdense_trimtx.data(), (int)hdense_trimtx.stride_0()); // Stride is final entry
+
+    // If hdense_trimtx is LayoutRight
+     LAPACKE_dtrtri(LAPACK_ROW_MAJOR,
+                   'L', 'N', (int)dense_partition_nrows, (scalar_t*)hdense_trimtx.data(), (int)hdense_trimtx.stride_0()); // Stride is final entry
+
+
+    #ifdef PRINT_HLEVEL_FREQ_PLOT
+    // Print result to output file, check with Matlab
+    // Print the actual inverse matrix
+     {
+      std::ofstream outfile;
+      outfile.open("Linv.txt");
+      if (outfile.is_open()) {
+        for ( size_t i = 0; i < hdense_trimtx.extent(0); ++i ) {
+          for ( size_t j = 0; j < hdense_trimtx.extent(1); ++j ) {
+            //outfile << i << " " << j << " " << hdense_trimtx(i,j) << std::endl;
+            if (j < hdense_trimtx.extent(1)-1) {
+              outfile << hdense_trimtx(i,j) << " ";
+            }
+            else {
+              outfile << hdense_trimtx(i,j) << std::endl;
+            }
+          }
+          //outfile << std::endl;
+        }
+        outfile.close();
+      }
+      else {
+        std::cout << "Linv OUTFILE DID NOT OPEN!!!" << std::endl;
+      }
+     }
+    #endif
+
+    }
+#endif
 
 
     // Init run to clear cache etc.

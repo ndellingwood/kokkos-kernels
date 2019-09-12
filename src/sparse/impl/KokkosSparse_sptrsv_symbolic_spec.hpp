@@ -124,6 +124,8 @@ struct SPTRSV_SYMBOLIC<KernelHandle, RowMapType, EntriesType, false, KOKKOSKERNE
                    const EntriesType entries)
   {
     auto sptrsv_handle = handle->get_sptrsv_handle();
+    auto nrows = row_map.extent(0)-1;
+    sptrsv_handle->new_init_handle(nrows);
 
 #ifdef DENSEPARTITION
     if ( sptrsv_handle->get_algorithm() == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_DENSEP_TP1 
