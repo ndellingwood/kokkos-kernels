@@ -1170,9 +1170,9 @@ struct TriLvlSchedTP1SingleBlockFunctor
 #ifdef CHAIN_DEBUG_OUTPUT
       printf("league_rank: %d  team_rank: %d  lvl: %ld  nodes_this_lvl: %ld\n", team.league_rank(), team.team_rank(), lvl, (long)nodes_this_lvl);
 #endif
-      diff = scalar_t(0.0);
       // If cutoff > team_size, then a thread will be responsible for multiple rows - this may be a helpful scenario depending on occupancy etc.
       for (int my_rank = my_team_rank; my_rank < cutoff; my_rank+=team.team_size() ) {
+      diff = scalar_t(0.0);
        if (my_rank < nodes_this_lvl) {
 
         // THIS is where the mapping of threadid to rowid happens
@@ -1345,9 +1345,9 @@ struct TriLvlSchedTP1SingleBlockFunctorDiagValues
 #ifdef CHAIN_DEBUG_OUTPUT
       printf("league_rank: %d  team_rank: %d  lvl: %ld  nodes_this_lvl: %ld\n", team.league_rank(), team.team_rank(), lvl, (long)nodes_this_lvl);
 #endif
-      diff = scalar_t(0.0);
       // If cutoff > team_size, then a thread will be responsible for multiple rows - this may be a helpful scenario depending on occupancy etc.
       for (int my_rank = my_team_rank; my_rank < cutoff; my_rank+=team.team_size() ) {
+       diff = scalar_t(0.0);
        if (my_rank < nodes_this_lvl) {
 
         // THIS is where the mapping of threadid to rowid happens
