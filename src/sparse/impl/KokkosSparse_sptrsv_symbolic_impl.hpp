@@ -189,7 +189,6 @@ void lower_tri_symbolic (TriSolveHandle &thandle, const RowMapType drow_map, con
   typedef typename TriSolveHandle::size_type size_type;
 
   typedef typename TriSolveHandle::nnz_lno_view_t  DeviceEntriesType;
-  //typedef typename TriSolveHandle::nnz_lno_view_t::HostMirror HostEntriesType;
 
   typedef typename TriSolveHandle::signed_nnz_lno_view_t DeviceSignedEntriesType;
   typedef typename TriSolveHandle::signed_nnz_lno_view_t::HostMirror HostSignedEntriesType;
@@ -208,17 +207,11 @@ void lower_tri_symbolic (TriSolveHandle &thandle, const RowMapType drow_map, con
   
   // get device view - will deep_copy to it at end of this host routine
   DeviceEntriesType dnodes_per_level = thandle.get_nodes_per_level();
-// FIXME Use handles hnodes_per_level
   auto nodes_per_level = thandle.get_host_nodes_per_level();
-//  HostEntriesType nodes_per_level = Kokkos::create_mirror_view(dnodes_per_level);
-//  Kokkos::deep_copy(nodes_per_level, dnodes_per_level);
 
   // get device view - will deep_copy to it at end of this host routine
   DeviceEntriesType dnodes_grouped_by_level = thandle.get_nodes_grouped_by_level();
-// FIXME Use handles hnodes_grouped_by_level
   auto nodes_grouped_by_level = thandle.get_host_nodes_grouped_by_level();
-//  HostEntriesType nodes_grouped_by_level = Kokkos::create_mirror_view(dnodes_grouped_by_level);
-//  Kokkos::deep_copy(nodes_grouped_by_level, dnodes_grouped_by_level);
 
   DeviceSignedEntriesType dlevel_list = thandle.get_level_list();
   HostSignedEntriesType level_list = Kokkos::create_mirror_view(dlevel_list);
@@ -242,6 +235,7 @@ void lower_tri_symbolic (TriSolveHandle &thandle, const RowMapType drow_map, con
 #ifdef DENSEPARTITION
   //auto starting_node = thandle.get_lvlsched_node_start();
   //auto ending_node = thandle.get_lvlsched_node_end();
+  //auto dense_nrows = thandle.get_dense_partition_nrows();
   auto starting_node = 0;
   auto ending_node = nrows;
 #else
@@ -265,10 +259,11 @@ void lower_tri_symbolic (TriSolveHandle &thandle, const RowMapType drow_map, con
   while (node_count < nrows) {
 
 #ifdef SYMB_INIT_ASSUME_LVL
-    for ( size_type row = starting_node+1; row < ending_node; ++row ) { // row 0 already included
+    for ( size_type row = starting_node+1; row < ending_node; ++row ) // row 0 already included
 #else
-    for ( size_type row = starting_node; row < ending_node; ++row ) {
+    for ( size_type row = starting_node; row < ending_node; ++row )
 #endif
+    {
       if ( level_list(row) == -1 ) { // unmarked
         bool is_root = true;
         signed_integral_t ptrstart = row_map(row);
@@ -406,7 +401,6 @@ void upper_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, co
   typedef typename TriSolveHandle::size_type size_type;
 
   typedef typename TriSolveHandle::nnz_lno_view_t  DeviceEntriesType;
-  //typedef typename TriSolveHandle::nnz_lno_view_t::HostMirror HostEntriesType;
 
   typedef typename TriSolveHandle::signed_nnz_lno_view_t DeviceSignedEntriesType;
   typedef typename TriSolveHandle::signed_nnz_lno_view_t::HostMirror HostSignedEntriesType;
@@ -425,17 +419,11 @@ void upper_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, co
   
   // get device view - will deep_copy to it at end of this host routine
   DeviceEntriesType dnodes_per_level = thandle.get_nodes_per_level();
-// FIXME Use handles hnodes_per_level
   auto nodes_per_level = thandle.get_host_nodes_per_level();
-//  HostEntriesType nodes_per_level = Kokkos::create_mirror_view(dnodes_per_level);
-//  Kokkos::deep_copy(nodes_per_level, dnodes_per_level);
 
   // get device view - will deep_copy to it at end of this host routine
   DeviceEntriesType dnodes_grouped_by_level = thandle.get_nodes_grouped_by_level();
-// FIXME Use handles hnodes_grouped_by_level
   auto nodes_grouped_by_level = thandle.get_host_nodes_grouped_by_level();
-//  HostEntriesType nodes_grouped_by_level = Kokkos::create_mirror_view(dnodes_grouped_by_level);
-//  Kokkos::deep_copy(nodes_grouped_by_level, dnodes_grouped_by_level);
 
   DeviceSignedEntriesType dlevel_list = thandle.get_level_list();
   HostSignedEntriesType level_list = Kokkos::create_mirror_view(dlevel_list);
@@ -455,17 +443,15 @@ void upper_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, co
   // Depending on algorithm, can be nrows - 1 vs dense_start_row - 1
   // FIXME Change this to allow for partitioned sparse mtx
 #ifdef DENSEPARTITION
+  //auto starting_node = thandle.get_lvlsched_node_start();
+  //auto ending_node = thandle.get_lvlsched_node_end();
   auto dense_nrows = thandle.get_dense_partition_nrows();
   auto starting_node = nrows - 1;
   auto ending_node = 0;
-  //auto starting_node = thandle.get_lvlsched_node_start();
-  //auto ending_node = thandle.get_lvlsched_node_end();
 #else
   auto starting_node = nrows - 1;
   auto ending_node = 0;
 #endif
-  std::cout << "  upper_tri_symbolic debug: " << std::endl;
-  std::cout << "  starting_node = " << starting_node << "  ending_node = " << ending_node << "  nrows = " << nrows << std::endl;
 
 #ifdef SYMB_INIT_ASSUME_LVL
   // final row is trivially independent in upper tri solve, start with it in level 0
@@ -481,10 +467,11 @@ void upper_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, co
   while (node_count < nrows) {
 
 #ifdef SYMB_INIT_ASSUME_LVL
-    for ( signed_integral_t row = starting_node-1; row >= ending_node; --row ) { // row 0 already included
+    for ( signed_integral_t row = starting_node-1; row >= ending_node; --row ) // row 0 already included
 #else
-    for ( signed_integral_t row = starting_node; row >= ending_node; --row ) {
+    for ( signed_integral_t row = starting_node; row >= ending_node; --row )
 #endif
+    {
       if ( level_list(row) == -1 ) { // unmarked
         bool is_root = true;
         signed_integral_t ptrstart = row_map(row);
@@ -597,9 +584,6 @@ void upper_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, co
  std::cout << "  Symbolic (upper tri) Total Time: " << timer_sym_uppertri_total.seconds() << std::endl;;
 #endif
 } // end upper_tri_symbolic
-
-
-
 
 
 

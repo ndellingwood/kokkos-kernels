@@ -289,6 +289,7 @@ public:
   }
 
 
+#if 0
   void init_handle(const size_type nrows_) {
     //set_nrows(nrows_);
     nrows = nrows_;
@@ -462,6 +463,7 @@ public:
     set_num_chain_entries(0);
     set_symbolic_incomplete();
   }
+#endif
 
 
 
