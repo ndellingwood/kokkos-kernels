@@ -125,6 +125,7 @@ struct SPTRSV_SYMBOLIC<KernelHandle, RowMapType, EntriesType, false, KOKKOSKERNE
   {
     auto sptrsv_handle = handle->get_sptrsv_handle();
     auto nrows = row_map.extent(0)-1;
+    std::cout << "sptrsv_symbolic: nrows to handle = " << nrows << std::endl;
     sptrsv_handle->new_init_handle(nrows);
 
 #ifdef DENSEPARTITION

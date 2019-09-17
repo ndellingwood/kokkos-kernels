@@ -1926,12 +1926,26 @@ cudaProfilerStop();
         typedef Kokkos::TeamPolicy<execution_space> policy_type;
         typedef Kokkos::TeamPolicy<LargerCutoffTag, execution_space> large_cutoff_policy_type;
         auto cutoff = thandle.get_chain_threshold();
-        const int team_size = cutoff;
+        // FIXME - should respect user's team_size
+        //const int team_size = cutoff;
+        auto team_size = thandle.get_team_size();
+        if (team_size <= 0 && cutoff == 0) { team_size = 1; }
+        else if (team_size <= 0 && cutoff > 0) { team_size = cutoff; }
+  #ifdef TRISOLVE_TIMERS
+     // full-solve time
+      chain_ctr++;
+      std::cout << "  *** Calling single-block solve *** " << std::endl;
+      std::cout << "      team_size = " << team_size << "  cutoff = " << cutoff << std::endl;
+      std::cout << "      lvl_nodes = " << lvl_nodes << std::endl;
+      timer_chain_solve.reset();
+  #endif
 //        const int team_size = std::is_same<typename Kokkos::DefaultExecutionSpace::memory_space, Kokkos::HostSpace>::value ? 1 : 256; // TODO chainlink cutoff hard-coded to 256: make this a "threshold" parameter in the handle
 
 #if defined(KOKKOS_ENABLE_CUDA) && defined(KOKKOSPSTRSV_SOLVE_IMPL_PROFILE)
 cudaProfilerStart();
 #endif
+        // FIXME should be able to simply pass is_lowertri to functor, no need for "if is_lowertri else" branches when using TriLvl* functors
+        // Will the cost in perf making a runtime if-check during each solve though??
         if (is_lowertri) {
           if (cutoff <= team_size) {
 #ifdef TRILVLSCHED
@@ -2143,6 +2157,8 @@ cudaProfilerStop();
 #if defined(KOKKOS_ENABLE_CUDA) && defined(KOKKOSPSTRSV_SOLVE_IMPL_PROFILE)
 cudaProfilerStart();
 #endif
+        // FIXME should be able to simply pass is_lowertri to functor, no need for "if is_lowertri else" branches when using TriLvl* functors
+        // Will the cost in perf making a runtime if-check during each solve though??
         if (is_lowertri) {
           // TODO Time changes between merged functor and individuals
          if (thandle.get_algorithm() == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_DENSEP_TP1)
@@ -2262,6 +2278,8 @@ cudaProfilerStart();
           lvl_nodes += hnodes_per_level(i);
         }
 
+        // FIXME should be able to simply pass is_lowertri to functor, no need for "if is_lowertri else" branches when using TriLvl* functors
+        // Will the cost in perf making a runtime if-check during each solve though??
         if (is_lowertri) {
           if (cutoff <= team_size) {
             std::cout << "cutoff <= team_size" << std::endl;

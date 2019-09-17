@@ -79,7 +79,9 @@ using namespace KokkosSparse::Experimental;
 using namespace KokkosKernels;
 using namespace KokkosKernels::Experimental;
 
-//#define PRINT_HLEVEL_FREQ_PLOT
+//#define PRINT_DENSETRIMTX
+#define PRINT_HLEVEL_FREQ_PLOT
+#define PRINT_LEVEL_LIST
 
 enum {DEFAULT, CUSPARSE, LVLSCHED_RP, LVLSCHED_TP1, LVLSCHED_TP2, LVLSCHED_TP1CHAIN, LVLSCHED_DENSEP_TP1, LVLSCHED_DENSEP_TP2};
 
@@ -321,7 +323,7 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
     auto hdense_trimtx = Kokkos::create_mirror_view(dense_trimtx);
     Kokkos::deep_copy(hdense_trimtx, dense_trimtx);
 
-    #ifdef PRINT_HLEVEL_FREQ_PLOT
+    #ifdef PRINT_DENSETRIMTX
     // Print result to output file, check with Matlab
     // Print the actual matrix
      {
@@ -357,7 +359,7 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
                    'L', 'N', (int)dense_partition_nrows, (scalar_t*)hdense_trimtx.data(), (int)hdense_trimtx.stride_0()); // Stride is final entry
 
 
-    #ifdef PRINT_HLEVEL_FREQ_PLOT
+    #ifdef PRINT_DENSETRIMTX
     // Print result to output file, check with Matlab
     // Print the actual inverse matrix
      {
@@ -490,23 +492,81 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
 
     // Output for level frequency plot
     #ifdef PRINT_HLEVEL_FREQ_PLOT
+    {
     auto hnpl = kh.get_sptrsv_handle()->get_host_nodes_per_level();
     auto nlevels = kh.get_sptrsv_handle()->get_num_levels();
     std::string algmstring = kh.get_sptrsv_handle()->return_algorithm_string();
     std::cout << algmstring << std::endl;
     // Create filename
-    std::string hnpl_filename = "lower_nodes_per_level_" + algmstring + ".txt";
-    std::cout << hnpl_filename << std::endl;
+    std::string filename = "lower_nodes_per_level_" + algmstring + ".txt";
+    std::cout << filename << std::endl;
     std::cout << "  nlevels = " << nlevels << std::endl;
     std::ofstream outfile;
-    outfile.open(hnpl_filename);
+    outfile.open(filename);
     if (outfile.is_open()) {
-      for ( int i = 0; i < nlevels; ++i )
+      for ( int i = 0; i < nlevels; ++i ) {
         outfile << hnpl(i) << std::endl;
+        //std::cout  << hnpl(i) << std::endl;
+      }
       outfile.close();
     }
     else {
       std::cout << "OUTFILE DID NOT OPEN!!!" << std::endl;
+    }
+
+    auto hngpl = kh.get_sptrsv_handle()->get_host_nodes_grouped_by_level();
+    filename = "lower_nodes_groupby_level_" + algmstring + ".txt";
+    std::cout << filename << std::endl;
+    outfile.open(filename);
+    if (outfile.is_open()) {
+      for ( size_t i = 0; i < hngpl.extent(0); ++i )
+        outfile << hngpl(i) << std::endl;
+      outfile.close();
+    }
+    else {
+      std::cout << "OUTFILE DID NOT OPEN!!!" << std::endl;
+    }
+
+    auto htree = kh.get_sptrsv_handle()->get_host_dep_tree();
+    filename = "lower_htree_" + algmstring + ".txt";
+    std::cout << filename << std::endl;
+    outfile.open(filename);
+    if (outfile.is_open()) {
+      for ( size_t i = 0; i < htree.extent(0); ++i )
+        outfile << htree(i) << std::endl;
+      outfile.close();
+    }
+    else {
+      std::cout << "OUTFILE DID NOT OPEN!!!" << std::endl;
+    }
+
+    }
+    #endif
+
+    #ifdef PRINT_LEVEL_LIST
+    {
+    auto level_list = kh.get_sptrsv_handle()->get_level_list();
+    auto hlevel_list = Kokkos::create_mirror_view(level_list);
+    Kokkos::deep_copy(hlevel_list, level_list);
+
+    auto nlevels = kh.get_sptrsv_handle()->get_num_levels();
+
+    std::string algmstring = kh.get_sptrsv_handle()->return_algorithm_string();
+    std::cout << algmstring << std::endl;
+    // Create filename
+    std::string filename = "lower_level_list_" + algmstring + ".txt";
+    std::cout << filename << std::endl;
+    std::cout << "  nlevels = " << nlevels << "  nodes = " << hlevel_list.extent(0) << std::endl;
+    std::ofstream outfile;
+    outfile.open(filename);
+    if (outfile.is_open()) {
+      for ( size_t i = 0; i < hlevel_list.extent(0); ++i )
+        outfile << hlevel_list(i) << std::endl;
+      outfile.close();
+    }
+    else {
+      std::cout << "OUTFILE DID NOT OPEN!!!" << std::endl;
+    }
     }
     #endif
 
@@ -776,23 +836,79 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
 
     // Output for level frequency plot
     #ifdef PRINT_HLEVEL_FREQ_PLOT
+    {
     auto hnpl = kh.get_sptrsv_handle()->get_host_nodes_per_level();
     auto nlevels = kh.get_sptrsv_handle()->get_num_levels();
     std::string algmstring = kh.get_sptrsv_handle()->return_algorithm_string();
     std::cout << algmstring << std::endl;
     // Create filename
-    std::string hnpl_filename = "upper_nodes_per_level_" + algmstring + ".txt";
-    std::cout << hnpl_filename << std::endl;
+    std::string filename = "upper_nodes_per_level_" + algmstring + ".txt";
+    std::cout << filename << std::endl;
     std::cout << "  nlevels = " << nlevels << std::endl;
     std::ofstream outfile;
-    outfile.open(hnpl_filename);
+    outfile.open(filename);
     if (outfile.is_open()) {
-      for ( int i = 0; i < nlevels; ++i )
+      for ( int i = 0; i < nlevels; ++i ) {
         outfile << hnpl(i) << std::endl;
+        //std::cout  << hnpl(i) << std::endl;
+      }
       outfile.close();
     }
     else {
       std::cout << "OUTFILE DID NOT OPEN!!!" << std::endl;
+    }
+
+    auto hngpl = kh.get_sptrsv_handle()->get_host_nodes_grouped_by_level();
+    filename = "lower_nodes_groupby_level_" + algmstring + ".txt";
+    std::cout << filename << std::endl;
+    outfile.open(filename);
+    if (outfile.is_open()) {
+      for ( size_t i = 0; i < hngpl.extent(0); ++i )
+        outfile << hngpl(i) << std::endl;
+      outfile.close();
+    }
+    else {
+      std::cout << "OUTFILE DID NOT OPEN!!!" << std::endl;
+    }
+
+    auto htree = kh.get_sptrsv_handle()->get_host_dep_tree();
+    filename = "upper_htree_" + algmstring + ".txt";
+    std::cout << filename << std::endl;
+    outfile.open(filename);
+    if (outfile.is_open()) {
+      for ( size_t i = 0; i < htree.extent(0); ++i )
+        outfile << htree(i) << std::endl;
+      outfile.close();
+    }
+    else {
+      std::cout << "OUTFILE DID NOT OPEN!!!" << std::endl;
+    }
+    }
+    #endif
+    #ifdef PRINT_LEVEL_LIST
+    {
+    auto level_list = kh.get_sptrsv_handle()->get_level_list();
+    auto hlevel_list = Kokkos::create_mirror_view(level_list);
+    Kokkos::deep_copy(hlevel_list, level_list);
+
+    auto nlevels = kh.get_sptrsv_handle()->get_num_levels();
+
+    std::string algmstring = kh.get_sptrsv_handle()->return_algorithm_string();
+    std::cout << algmstring << std::endl;
+    // Create filename
+    std::string filename = "lower_level_list_" + algmstring + ".txt";
+    std::cout << filename << std::endl;
+    std::cout << "  nlevels = " << nlevels << "  nodes = " << hlevel_list.extent(0) << std::endl;
+    std::ofstream outfile;
+    outfile.open(filename);
+    if (outfile.is_open()) {
+      for ( size_t i = 0; i < hlevel_list.extent(0); ++i )
+        outfile << hlevel_list(i) << std::endl;
+      outfile.close();
+    }
+    else {
+      std::cout << "OUTFILE DID NOT OPEN!!!" << std::endl;
+    }
     }
     #endif
 

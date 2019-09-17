@@ -124,6 +124,7 @@ private:
   nnz_lno_view_t nodes_grouped_by_level;
   host_nnz_lno_view_t hnodes_grouped_by_level; // NEW
   size_type nlevel;
+  host_signed_nnz_lno_view_t hdep_tree;
 
   int team_size;
   int vector_size;
@@ -254,6 +255,7 @@ public:
     nodes_grouped_by_level(),
     hnodes_grouped_by_level(),
     nlevel(0),
+    hdep_tree(),
     team_size(-1),
     vector_size(-1),
     diagonal_offsets(),
@@ -341,6 +343,8 @@ public:
       hnodes_per_level = Kokkos::create_mirror_view(nodes_per_level);
       nodes_grouped_by_level = nnz_lno_view_t("nodes_grouped_by_level", nrows_);
       hnodes_grouped_by_level = Kokkos::create_mirror_view(nodes_grouped_by_level);
+      hdep_tree = host_signed_nnz_lno_view_t(Kokkos::ViewAllocateWithoutInitializing("hdep_tree"), nrows_);
+      Kokkos::deep_copy(hdep_tree, signed_integral_t(-1));
     }
 #ifdef DENSEPARTITION
     else if ( this->require_symbolic_lvlsched_phase == true && this->require_symbolic_numeric_dense_phase == true)
@@ -362,6 +366,8 @@ public:
       hnodes_grouped_by_level = Kokkos::create_mirror_view(nodes_grouped_by_level);
       std::cout << "    init_handle: nodes_grouped_by_level.extent(0) = " << nodes_grouped_by_level.extent(0) << std::endl;
       std::cout << "    init_handle: hnodes_grouped_by_level.extent(0) = " << hnodes_grouped_by_level.extent(0) << std::endl;
+      hdep_tree = host_signed_nnz_lno_view_t(Kokkos::ViewAllocateWithoutInitializing("hdep_tree"), nrows_);
+      Kokkos::deep_copy(hdep_tree, signed_integral_t(-1));
     }
 #endif
 
@@ -506,7 +512,7 @@ public:
     // TODO: Set sizes differently/smaller, resize during symbolic if out of room
     if ( this->require_symbolic_lvlsched_phase == true )
     {
-      std::cout << "  init_handle: level schedule allocs" << std::endl;
+      std::cout << "  newinit_handle: level schedule allocs" << std::endl;
       set_num_levels(0);
       level_list = signed_nnz_lno_view_t(Kokkos::ViewAllocateWithoutInitializing("level_list"), nrows_);
       Kokkos::deep_copy( level_list, signed_integral_t(-1) );
@@ -514,6 +520,14 @@ public:
       hnodes_per_level = Kokkos::create_mirror_view(nodes_per_level);
       nodes_grouped_by_level = nnz_lno_view_t("nodes_grouped_by_level", nrows_);
       hnodes_grouped_by_level = Kokkos::create_mirror_view(nodes_grouped_by_level);
+      hdep_tree = host_signed_nnz_lno_view_t(Kokkos::ViewAllocateWithoutInitializing("hdep_tree"), nrows_);
+      Kokkos::deep_copy(hdep_tree, signed_integral_t(-1));
+
+      std::cout << "  ll.extent = " << level_list.extent(0) << std::endl;
+      std::cout << "  npl.extent = " << nodes_per_level.extent(0) << std::endl;
+      std::cout << "  hnpl.extent = " << hnodes_per_level.extent(0) << std::endl;
+      std::cout << "  ngbl.extent = " << nodes_grouped_by_level.extent(0) << std::endl;
+      std::cout << "  hngbl.extent = " << hnodes_grouped_by_level.extent(0) << std::endl;
     }
 
     // TODO Incorporate usage of this data into the algorithms
@@ -597,6 +611,11 @@ public:
     auto hlevel_list = Kokkos::create_mirror_view(this->level_list);
     Kokkos::deep_copy(hlevel_list, this->level_list);
     return hlevel_list; 
+  }
+
+  inline
+  host_signed_nnz_lno_view_t get_host_dep_tree() const {
+    return hdep_tree;
   }
 
   KOKKOS_INLINE_FUNCTION

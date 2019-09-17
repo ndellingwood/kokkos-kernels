@@ -56,7 +56,7 @@
 //#define CHAIN_LVL_OUTPUT_INFO
 //#define PRINT1DVIEWSSYMB
 //#define DEBUGSYMBDENSE
-#define SYMB_DIAG_CHECK
+//#define SYMB_DIAG_CHECK
 //#define SYMB_INIT_ASSUME_LVL
 
 // TODO Pass values array and store diagonal entries - should this always be done or optional?
@@ -231,6 +231,8 @@ void lower_tri_symbolic (TriSolveHandle &thandle, const RowMapType drow_map, con
   // diagonal_offsets is uninitialized - deep_copy unnecessary at the beginning, only needed at the end
   auto hdiagonal_offsets = Kokkos::create_mirror_view(diagonal_offsets);
 
+  auto hdep_tree = thandle.get_host_dep_tree();
+
   size_type level = 0;
 
 #ifdef SYMB_DIAG_CHECK
@@ -271,13 +273,17 @@ void lower_tri_symbolic (TriSolveHandle &thandle, const RowMapType drow_map, con
         bool is_root = true;
         signed_integral_t ptrstart = row_map(row);
         signed_integral_t ptrend   = row_map(row+1);
+        //std::cout << "row = " << row << "  pst = " << ptrstart << "  pend = " << ptrend << std::endl;
 
         for (signed_integral_t offset = ptrstart; offset < ptrend; ++offset) {
           size_type col = entries(offset); //FIXME: Can col be incorrectly mapped, wrong range compared to shifted re-start row_map?
+          //std::cout << "  col = " << col << std::endl;
           // FIXME: For lower_tri, colid is unchanged; shifted for upper_tri...
           if ( previous_level_list(col) == -1 && col != row ) { // unmarked
             if ( col < row ) {
+              //std::cout << "  NOT ROOT: col = " << col << "  row = " << row << std::endl;
               is_root = false;
+              hdep_tree(row) = col; // can have multiple cols - all that matters is the final
               break;
             }
           }
@@ -304,6 +310,7 @@ void lower_tri_symbolic (TriSolveHandle &thandle, const RowMapType drow_map, con
           nodes_per_level(level) += 1;
           nodes_grouped_by_level(node_count) = row;
           node_count += 1;
+          //std::cout << "  Update: level = " << level << "  npl = " << nodes_per_level(level) << "  node_count = " << node_count << std::endl;
         }
 
       } // end if
@@ -352,6 +359,30 @@ void lower_tri_symbolic (TriSolveHandle &thandle, const RowMapType drow_map, con
   Kokkos::deep_copy(dnodes_per_level, nodes_per_level);
   Kokkos::deep_copy(dlevel_list, level_list);
   Kokkos::deep_copy(diagonal_offsets, hdiagonal_offsets);
+
+  // Extra check:
+#ifdef LVL_OUTPUT_INFO
+  {
+  std::cout << "  End symb - extra checks" << std::endl;
+  std::cout << "  node_count = " << node_count << std::endl;
+  std::cout << "  nlevel = " << level << std::endl;
+  std::cout << "  npl.extent = " << nodes_per_level.extent(0) << std::endl;
+  long check_count = 0;
+  Kokkos::parallel_reduce("check_count host", Kokkos::RangePolicy<Kokkos::DefaultHostExecutionSpace>(0, nodes_per_level.extent(0)),
+    KOKKOS_LAMBDA (const long i, long& update) {
+      update+=nodes_per_level(i);
+    }, check_count);
+  std::cout << "  host check_count= " << check_count << std::endl;
+
+  check_count = 0; // reset
+  Kokkos::parallel_reduce("check_count device", Kokkos::RangePolicy<Kokkos::DefaultExecutionSpace>(0, dnodes_per_level.extent(0)),
+    KOKKOS_LAMBDA (const long i, long& update) {
+      update+=dnodes_per_level(i);
+    }, check_count);
+  std::cout << "  devicecheck_count= " << check_count << std::endl;
+  }
+#endif
+
  }
 
 #ifdef TRISOLVE_SYMB_TIMERS
@@ -417,6 +448,8 @@ void upper_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, co
   // diagonal_offsets is uninitialized - deep_copy unnecessary at the beginning, only needed at the end
   auto hdiagonal_offsets = Kokkos::create_mirror_view(diagonal_offsets);
 
+  auto hdep_tree = thandle.get_host_dep_tree();
+
   size_type level = 0;
   // FIXME: starting_node only holds for FULL matrix, not the sparse partition in different algorithm
   // Depending on algorithm, can be nrows - 1 vs dense_start_row - 1
@@ -472,6 +505,7 @@ void upper_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, co
           if ( previous_level_list(col) == -1 && col != row ) { // unmarked
             if ( col > row ) {
               is_root = false;
+              hdep_tree(row) = col; // can have multiple cols - all that matters is the final
               break;
             }
           }
@@ -502,13 +536,15 @@ void upper_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, co
     level += 1;
   } // end while
 
-  thandle.set_symbolic_complete();
   thandle.set_num_levels(level);
 
   // Create the chain now
   if ( thandle.algm_requires_symb_chain() ) {
+    std::cout << "  Symbolic chain phase begin" << std::endl;
     symbolic_chain_phase(thandle, nodes_per_level);
   }
+
+  thandle.set_symbolic_complete();
 
   // Output check
 #ifdef LVL_OUTPUT_INFO
@@ -531,6 +567,30 @@ void upper_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, co
   Kokkos::deep_copy(dnodes_per_level, nodes_per_level);
   Kokkos::deep_copy(dlevel_list, level_list);
   Kokkos::deep_copy(diagonal_offsets, hdiagonal_offsets);
+
+  // Extra check:
+#ifdef LVL_OUTPUT_INFO
+  {
+  std::cout << "  End symb - extra checks" << std::endl;
+  std::cout << "  node_count = " << node_count << std::endl;
+  std::cout << "  nlevel = " << level << std::endl;
+  std::cout << "  npl.extent = " << nodes_per_level.extent(0) << std::endl;
+  long check_count = 0;
+  Kokkos::parallel_reduce("check_count host", Kokkos::RangePolicy<Kokkos::DefaultHostExecutionSpace>(0, nodes_per_level.extent(0)),
+    KOKKOS_LAMBDA (const long i, long& update) {
+      update+=nodes_per_level(i);
+    }, check_count);
+  std::cout << "  host check_count= " << check_count << std::endl;
+
+  check_count = 0; // reset
+  Kokkos::parallel_reduce("check_count device", Kokkos::RangePolicy<Kokkos::DefaultExecutionSpace>(0, dnodes_per_level.extent(0)),
+    KOKKOS_LAMBDA (const long i, long& update) {
+      update+=dnodes_per_level(i);
+    }, check_count);
+  std::cout << "  devicecheck_count= " << check_count << std::endl;
+  }
+#endif
+
  }
 
 #ifdef TRISOLVE_SYMB_TIMERS
