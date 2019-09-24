@@ -67,6 +67,7 @@
 //#define SWAPPARFORS
 
 //#define TRILVLSCHED
+#define LTCUDAGRAPHTEST
 
 //#define KOKKOSPSTRSV_SOLVE_IMPL_PROFILE 1
 #if defined(KOKKOS_ENABLE_CUDA) && defined(KOKKOSPSTRSV_SOLVE_IMPL_PROFILE)
@@ -1543,6 +1544,637 @@ struct TriLvlSchedTP1SingleBlockFunctorDiagValues
 // solver control routines
 // --------------------------------
 
+
+// TODO To make this work:
+// - Create cum_nodes_per_level array via parallel_scan
+// - Remove different solver versions to eliminate if-else branches of kernel calls
+// - Modify functors to take the cum_nodes_per_level array, needed to map thread-block to work item
+//
+
+#if defined(LTCUDAGRAPHTEST) && defined(KOKKOS_ENABLE_CUDA) && 10000 < CUDA_VERSION
+
+template <class SpaceType>
+struct ReturnTeamPolicyType;
+
+#ifdef KOKKOS_ENABLE_SERIAL
+template <>
+struct ReturnTeamPolicyType<Kokkos::Serial> {
+  using PolicyType = Kokkos::TeamPolicy<Kokkos::Serial>;
+
+  static inline
+  PolicyType get_policy(int nt, int ts) {
+    return PolicyType(nt,ts);
+  }
+
+  template <class ExecInstanceType>
+  static inline
+  PolicyType get_policy(int nt, int ts, ExecInstanceType ) {
+    return PolicyType(nt,ts);
+    //return PolicyType(ExecInstanceType(),nt,ts);
+  }
+};
+#endif
+#ifdef KOKKOS_ENABLE_OPENMP
+template <>
+struct ReturnTeamPolicyType<Kokkos::OpenMP> {
+  using PolicyType = Kokkos::TeamPolicy<Kokkos::OpenMP>;
+
+  static inline
+  PolicyType get_policy(int nt, int ts) {
+    return PolicyType(nt,ts);
+  }
+
+  template <class ExecInstanceType>
+  static inline
+  PolicyType get_policy(int nt, int ts, ExecInstanceType ) {
+    return PolicyType(nt,ts);
+    //return PolicyType(ExecInstanceType(),nt,ts);
+  }
+};
+#endif
+#ifdef KOKKOS_ENABLE_CUDA
+template <>
+struct ReturnTeamPolicyType<Kokkos::Cuda> {
+  using PolicyType = Kokkos::TeamPolicy<Kokkos::Cuda>;
+
+  static inline
+  PolicyType get_policy(int nt, int ts) {
+    return PolicyType(nt,ts);
+  }
+
+  template <class ExecInstanceType>
+  static inline
+  PolicyType get_policy(int nt, int ts, ExecInstanceType stream) {
+    return PolicyType(stream,nt,ts);
+  }
+};
+#endif
+
+template <class SpaceType>
+struct ReturnRangePolicyType;
+
+#ifdef KOKKOS_ENABLE_SERIAL
+template <>
+struct ReturnRangePolicyType<Kokkos::Serial> {
+  using PolicyType = Kokkos::RangePolicy<Kokkos::Serial>;
+
+  static inline
+  PolicyType get_policy(int nt, int ts) {
+    return PolicyType(nt,ts);
+  }
+
+  template <class ExecInstanceType>
+  static inline
+  PolicyType get_policy(int nt, int ts, ExecInstanceType ) {
+    return PolicyType(nt,ts);
+    //return PolicyType(ExecInstanceType(),nt,ts);
+  }
+};
+#endif
+#ifdef KOKKOS_ENABLE_OPENMP
+template <>
+struct ReturnRangePolicyType<Kokkos::OpenMP> {
+  using PolicyType = Kokkos::RangePolicy<Kokkos::OpenMP>;
+
+  static inline
+  PolicyType get_policy(int nt, int ts) {
+    return PolicyType(nt,ts);
+  }
+
+  template <class ExecInstanceType>
+  static inline
+  PolicyType get_policy(int nt, int ts, ExecInstanceType ) {
+    return PolicyType(nt,ts);
+    //return PolicyType(ExecInstanceType(),nt,ts);
+  }
+};
+#endif
+#ifdef KOKKOS_ENABLE_CUDA
+template <>
+struct ReturnRangePolicyType<Kokkos::Cuda> {
+  using PolicyType = Kokkos::RangePolicy<Kokkos::Cuda>;
+
+  static inline
+  PolicyType get_policy(int nt, int ts) {
+    return PolicyType(nt,ts);
+  }
+
+  template <class ExecInstanceType>
+  static inline
+  PolicyType get_policy(int nt, int ts, ExecInstanceType stream) {
+    return PolicyType(stream,nt,ts);
+  }
+};
+#endif
+
+template < class TriSolveHandle, class RowMapType, class EntriesType, class ValuesType, class RHSType, class LHSType >
+void lower_tri_solve_cg( TriSolveHandle & thandle, const RowMapType row_map, const EntriesType entries, const ValuesType values, const RHSType & rhs, LHSType &lhs) {
+
+#if 1
+{
+    typename TriSolveHandle::SPTRSVcudaGraphWrapperType* lcl_cudagraph = thandle.get_sptrsvCudaGraph();
+
+    auto nlevels = thandle.get_num_levels();
+    std::cout << "Begin Solve: nlevels = " << nlevels << std::endl;
+
+    int N = 1;
+    Kokkos::View<int*> a(Kokkos::ViewAllocateWithoutInitializing("A"),N);
+
+    auto stream1 = lcl_cudagraph->stream;
+    Kokkos::Cuda cuda1(stream1);
+    auto graph = lcl_cudagraph->cudagraph;
+
+    //cudaStream_t stream1;
+    //cudaGraph_t graph;
+
+    // Create a stream
+    //cudaStreamCreate(&stream1);
+   // Kokkos::Cuda cuda1(stream1);
+
+
+// WIthout this, funky error...
+    Kokkos::parallel_for("Init",N,KOKKOS_LAMBDA (const int i) {
+      a(i) = i;
+    });
+
+    Kokkos::fence();
+
+    typedef typename TriSolveHandle::nnz_lno_view_t NGBLType;
+    typedef typename TriSolveHandle::execution_space execution_space;
+    typedef typename TriSolveHandle::size_type size_type;
+    auto hnodes_per_level = thandle.get_host_nodes_per_level();
+    auto nodes_grouped_by_level = thandle.get_nodes_grouped_by_level();
+
+    size_type node_count = 0;
+
+    typedef Kokkos::TeamPolicy<execution_space> policy_type;
+    int team_size = thandle.get_team_size();
+    team_size = team_size == -1 ? 64 : team_size;
+
+    //auto graphExec = lcl_cudagraph->cudagraphinstance;
+    // Start capturing stream
+    if(thandle.cudagraphCreated == false) {
+    Kokkos::fence();
+    cudaStreamBeginCapture(stream1, cudaStreamCaptureModeGlobal);
+    {
+      for (int iter = 0; iter < nlevels; ++iter) {
+        size_type lvl_nodes = hnodes_per_level(iter);
+
+        using policy_type = ReturnTeamPolicyType<execution_space>;
+
+        Kokkos::parallel_for("parfor_l_team_cudagraph", ReturnTeamPolicyType<execution_space>::get_policy(lvl_nodes,team_size,cuda1), LowerTriLvlSchedTP1SolverFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType>(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, node_count));
+
+        node_count += hnodes_per_level(iter);
+      }
+    }
+    cudaStreamEndCapture(stream1, &graph);
+
+    // Create graphExec
+    //cudaGraphInstantiate(&graphExec, graph, NULL, NULL, 0);
+    cudaGraphInstantiate(&(lcl_cudagraph->cudagraphinstance), graph, NULL, NULL, 0);
+      thandle.cudagraphCreated = true;
+    }
+    // Run graph
+    Kokkos::fence();
+    //cudaGraphLaunch(graphExec, stream1);
+    cudaGraphLaunch(lcl_cudagraph->cudagraphinstance, stream1);
+
+    cudaStreamSynchronize(stream1);
+    Kokkos::fence();
+    std::cout << "  Kokkos stream example check" << std::endl;
+//  Kokkos::abort("Exit");
+}
+
+
+
+
+#elif defined(CHRISTIANSTESTEXAMPLE)
+// Christian's example - https://github.com/kokkos/kokkos/issues/2132 
+{
+    typename TriSolveHandle::SPTRSVcudaGraphWrapperType* lcl_cudagraph = thandle.get_sptrsvCudaGraph();
+
+
+    typedef Kokkos::CudaSpace result_space_type;
+
+    auto nlevels = thandle.get_num_levels();
+    int N = 10;
+    int R = 1;
+    Kokkos::View<int*> a("A",N);
+
+    auto stream1 = lcl_cudagraph->stream;
+    Kokkos::Cuda cuda1(stream1);
+    auto graph = lcl_cudagraph->cudagraph;
+
+    //cudaStream_t stream1;
+    //cudaGraph_t graph;
+
+    // Create a stream
+    //cudaStreamCreate(&stream1);
+   // Kokkos::Cuda cuda1(stream1);
+
+
+    Kokkos::parallel_for("Init",N,KOKKOS_LAMBDA (const int i) {
+      a(i) = i;
+    });
+
+    Kokkos::View<int64_t, result_space_type> result("Result");
+
+    Kokkos::fence();
+
+      Kokkos::parallel_for("Add-5",Kokkos::RangePolicy<>(cuda1,0,N),KOKKOS_LAMBDA (const int i) {
+        a(i) += 5;
+      });
+
+      Kokkos::parallel_for("Sub-3",Kokkos::RangePolicy<>(cuda1,0,N),KOKKOS_LAMBDA (const int i) {
+       a(i) -= 3;
+      });
+
+      Kokkos::parallel_reduce("reduce",Kokkos::RangePolicy<>(cuda1,0,N),KOKKOS_LAMBDA (const int i, int64_t& lsum) {
+       lsum += a(i);
+      },result);
+      cudaStreamSynchronize(stream1);
+
+    Kokkos::parallel_for("Init",N,KOKKOS_LAMBDA (const int i) {
+      a(i) = i;
+    });
+    Kokkos::fence();
+
+    Kokkos::Timer timer;
+    for(int r=0; r<R; r++) {
+      Kokkos::parallel_for("Add-5",Kokkos::RangePolicy<>(cuda1,0,N),KOKKOS_LAMBDA (const int i) {
+        a(i) += 5;
+      });
+
+      Kokkos::parallel_for("Sub-3",Kokkos::RangePolicy<>(cuda1,0,N),KOKKOS_LAMBDA (const int i) {
+       a(i) -= 3;
+      });
+
+      Kokkos::parallel_reduce("reduce",Kokkos::RangePolicy<>(cuda1,0,N),KOKKOS_LAMBDA (const int i, int64_t& lsum) {
+       lsum += a(i);
+      },result);
+      int64_t s_result;
+      if(std::is_same<result_space_type,Kokkos::CudaSpace>::value) {
+        Kokkos::deep_copy(cuda1,s_result,result);
+        cudaStreamSynchronize(stream1);
+      } else {
+        cudaStreamSynchronize(stream1);
+        s_result = result();
+      }
+      printf("Result %i %li %li\n",r,s_result,int64_t(N)*int64_t(N-1)/2+int64_t(N)*2*(r+1));
+    }
+    double time = timer.seconds();
+    printf("NoGraphTime<%s>: %e\n",result_space_type::name(),time);
+
+    Kokkos::parallel_for("Init",N,KOKKOS_LAMBDA (const int i) {
+      a(i) = i;
+    });
+
+    typedef typename TriSolveHandle::nnz_lno_view_t NGBLType;
+    typedef typename TriSolveHandle::execution_space execution_space;
+    typedef typename TriSolveHandle::size_type size_type;
+    auto hnodes_per_level = thandle.get_host_nodes_per_level();
+    auto nodes_grouped_by_level = thandle.get_nodes_grouped_by_level();
+
+    size_type node_count = 0;
+
+    typedef Kokkos::TeamPolicy<execution_space> policy_type;
+    int team_size = thandle.get_team_size();
+    team_size = team_size == -1 ? 64 : team_size;
+
+    Kokkos::fence();
+    // Start capturing stream
+    cudaStreamBeginCapture(stream1, cudaStreamCaptureModeGlobal);
+    {
+      for (int iter = 0; iter < nlevels; ++iter) {
+      size_type lvl_nodes = hnodes_per_level(iter);
+      Kokkos::parallel_for("Add-5",Kokkos::RangePolicy<>(cuda1,0,N),KOKKOS_LAMBDA (const int i) {
+        a(i) += 5;
+      });
+
+      Kokkos::parallel_for("Sub-3",Kokkos::RangePolicy<>(cuda1,0,N),KOKKOS_LAMBDA (const int i) {
+       a(i) -= 3;
+      });
+
+      Kokkos::parallel_reduce("reduce",Kokkos::RangePolicy<>(cuda1,0,N),KOKKOS_LAMBDA (const int i, int64_t& lsum) {
+       lsum += a(i);
+      },result);
+
+      Kokkos::parallel_for("TP",Kokkos::TeamPolicy<>(cuda1,lvl_nodes,32),KOKKOS_LAMBDA (const typename Kokkos::TeamPolicy<>::member_type & member) {
+        if (member.league_rank() == 0 && member.team_rank()==0)
+          a(0) -= 3;
+
+        member.team_barrier();
+
+        double dresult = nlevels;
+        Kokkos::parallel_reduce(Kokkos::TeamThreadRange(member,0,3), [=] (const int i, double &update) {
+          update+=1;
+        }, dresult);
+        a(0) += dresult;
+      });
+
+      using policy_type = ReturnTeamPolicyType<execution_space>;
+      Kokkos::parallel_for("TP", policy_type::get_policy(lvl_nodes,32,cuda1),
+        KOKKOS_LAMBDA (const typename policy_type::PolicyType::member_type & member) {
+        if (member.league_rank() == 0 && member.team_rank()==0)
+          a(0) -= 3;
+
+        member.team_barrier();
+
+        double dresult = nlevels;
+        Kokkos::parallel_reduce(Kokkos::TeamThreadRange(member,0,3), [=] (const int i, double &update) {
+          update+=1;
+        }, dresult);
+        a(0) += dresult;
+      });
+
+        Kokkos::parallel_for("parfor_l_team_cudagraph", ReturnTeamPolicyType<execution_space>::get_policy(lvl_nodes,team_size,cuda1), LowerTriLvlSchedTP1SolverFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType>(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, node_count));
+
+        node_count += hnodes_per_level(iter);
+      }
+    }
+    cudaStreamEndCapture(stream1, &graph);
+
+    // Create graphExec
+    //cudaGraphExec_t graphExec;
+    auto graphExec = lcl_cudagraph->cudagraphinstance;
+    cudaGraphInstantiate(&graphExec, graph, NULL, NULL, 0);
+
+    // Run graph
+    Kokkos::fence();
+    timer.reset();
+    for(int r=0; r<R; r++) {
+      cudaGraphLaunch(graphExec, stream1);
+      int64_t s_result;
+      if(std::is_same<result_space_type,Kokkos::CudaSpace>::value) {
+        Kokkos::deep_copy(cuda1,s_result,result);
+        cudaStreamSynchronize(stream1);
+      } else {
+        cudaStreamSynchronize(stream1);
+        s_result = result();
+      }
+      printf("Result %i %li %li\n",r,s_result,int64_t(N)*int64_t(N-1)/2+int64_t(N)*2*(r+1));
+    }
+    double time2 = timer.seconds();
+    printf("GraphTime<%s>: %e\n",result_space_type::name(),time2);
+    Kokkos::fence();
+
+    // Check whether its ok
+    Kokkos::parallel_for("Check",N,KOKKOS_LAMBDA (const int i) {
+      if(a(i)!=i+R*2) printf("Error: %i %i %i\n",i,a(i),i+R*2);
+    });
+
+  std::cout << "  Kokkos stream example check" << std::endl;
+//  Kokkos::abort("Exit");
+}
+
+
+#else
+
+
+
+#if defined(KOKKOS_ENABLE_CUDA) && defined(KOKKOSPSTRSV_SOLVE_IMPL_PROFILE)
+cudaProfilerStop();
+#endif
+
+  typedef typename TriSolveHandle::execution_space execution_space;
+  typedef typename TriSolveHandle::size_type size_type;
+  typedef typename TriSolveHandle::nnz_lno_view_t NGBLType;
+
+#ifdef TRISOLVE_TIMERS
+  double time_outer = 0.0, time_inner_total = 0.0, time_setup = 0.0;
+  Kokkos::Timer timer_total;
+  Kokkos::Timer timer_inner;
+  Kokkos::Timer timer_setup;
+#endif
+
+  auto nlevels = thandle.get_num_levels();
+  // Keep this a host View, create device version and copy to back to host during scheduling
+  // This requires making sure the host view in the handle is properly updated after the symbolic phase
+  auto nodes_per_level = thandle.get_nodes_per_level();
+  auto hnodes_per_level = thandle.get_host_nodes_per_level();
+  //auto hnodes_per_level = Kokkos::create_mirror_view(nodes_per_level);
+  //Kokkos::deep_copy(hnodes_per_level, nodes_per_level);  
+
+  auto nodes_grouped_by_level = thandle.get_nodes_grouped_by_level();
+
+  size_type node_count = 0;
+#ifdef TRISOLVE_TIMERS
+    // time for setup
+    time_setup = timer_setup.seconds();
+    timer_total.reset();
+#endif
+
+  // This must stay serial; would be nice to try out Cuda's graph stuff to reduce kernel launch overhead
+#if defined(KOKKOS_ENABLE_CUDA) && 10000 < CUDA_VERSION
+  std::cout << "1 TESTING CUDAGRAPH" << std::endl;
+  typename TriSolveHandle::SPTRSVcudaGraphWrapperType* lcl_cudagraph = thandle.get_sptrsvCudaGraph();
+  auto stream = lcl_cudagraph->stream;
+  Kokkos::Cuda kokkosstream1(stream);
+  auto cudagraph = lcl_cudagraph->cudagraph;
+  auto cudagraphinstance = lcl_cudagraph->cudagraphinstance;
+  cudaStreamSynchronize(stream);
+
+#else
+  execution_space kokkosstream1();
+#endif
+
+  Kokkos::View<size_type*, Kokkos::HostSpace> hcum_npl("hcum_npl", nlevels);
+
+  Kokkos::parallel_scan("row_map_rectspmtx scan", Kokkos::RangePolicy<Kokkos::DefaultHostExecutionSpace>(0, hcum_npl.extent(0)),
+    KOKKOS_LAMBDA (const size_type i, size_type& update, const bool& final) {
+      update += hnodes_per_level(i);
+      if (final) {
+        hcum_npl(i) = update;
+      }
+    });
+  Kokkos::fence();
+
+  std::cout << "hcum_npl(0) = " << hcum_npl(0) << "  hcum_npl(1) = " << hcum_npl(1) << std::endl;
+
+        typedef Kokkos::TeamPolicy<execution_space> policy_type;
+        int team_size = thandle.get_team_size();
+        team_size = team_size == -1 ? 64 : team_size;
+
+  for ( size_type lvl = 0; lvl < nlevels; ++lvl ) {
+#if defined(KOKKOS_ENABLE_CUDA) && 10000 < CUDA_VERSION
+  std::cout << "2 TESTING CUDAGRAPH" << std::endl;
+  if (thandle.cudagraphCreated == false)
+   {
+    cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal);
+#endif
+    size_type lvl_nodes = hnodes_per_level(lvl);
+
+#ifdef TRISOLVE_TIMERS
+    timer_inner.reset();
+#endif
+
+#if defined(KOKKOS_ENABLE_CUDA) && defined(KOKKOSPSTRSV_SOLVE_IMPL_PROFILE)
+cudaProfilerStart();
+#endif
+      //if ( thandle.get_algorithm() == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_TP1 ) 
+/*
+        auto policy = ReturnTeamPolicyType<execution_space>::get_policy(lvl_nodes,team_size,kokkosstream1);
+
+#ifdef TRILVLSCHED
+        TriLvlSchedTP1SolverFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, true, node_count);
+#else
+        LowerTriLvlSchedTP1SolverFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, node_count);
+#endif
+          //Kokkos::parallel_for("parfor_l_team", policy_type( kokkosstream1, lvl_nodes , team_size ), tstf);
+          Kokkos::parallel_for("parfor_l_team_cudagraph", policy, tstf);
+*/
+// Inlined...
+          Kokkos::parallel_for("parfor_l_team_cudagraph", ReturnTeamPolicyType<execution_space>::get_policy(lvl_nodes,team_size,kokkosstream1), LowerTriLvlSchedTP1SolverFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType>(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, node_count));
+
+/*
+ // Test team policy - broken
+        Kokkos::parallel_for("test", policy, KOKKOS_LAMBDA ( const typename policy_type::member_type &member ) {
+          lhs(0) = 1;
+        });
+
+ // Test range policy - broken
+        auto rpolicy = ReturnRangePolicyType<execution_space>::get_policy(0,4,kokkosstream1);
+        Kokkos::parallel_for("test", rpolicy, KOKKOS_LAMBDA ( const int i ) {
+          lhs(0) = 1;
+        });
+*/
+      node_count += lvl_nodes;
+
+
+
+#if defined(KOKKOS_ENABLE_CUDA) && 10000 < CUDA_VERSION
+  std::cout << "3 TESTING CUDAGRAPH" << std::endl;
+   cudaStreamEndCapture(stream, &cudagraph );
+  std::cout << "4 TESTING CUDAGRAPH" << std::endl;
+   cudaGraphInstantiate(&cudagraphinstance, cudagraph, NULL, NULL, 0);
+   thandle.cudagraphCreated = true;
+#endif
+
+#if defined(KOKKOS_ENABLE_CUDA) && defined(KOKKOSPSTRSV_SOLVE_IMPL_PROFILE)
+cudaProfilerStop();
+#endif
+#ifdef TRISOLVE_TIMERS
+    // FIXME Adding Kokkos::fence() for timing purposes - is it necessary if running on a single stream???
+   // Kokkos::fence();
+    time_inner_total += timer_inner.seconds();
+#endif
+#if defined(KOKKOS_ENABLE_CUDA) && 10000 < CUDA_VERSION
+   } // scope for cudagraph if-block
+#endif
+#if defined(KOKKOS_ENABLE_CUDA) && 10000 < CUDA_VERSION
+  std::cout << "5 TESTING CUDAGRAPH" << std::endl;
+   cudaGraphLaunch(cudagraphinstance, stream);
+  std::cout << "6 TESTING CUDAGRAPH" << std::endl;
+   cudaStreamSynchronize(stream);
+//CU_STREAM_PER_THREAD
+//CU_STREAM_LEGACY
+#endif
+
+  } // end for lvl
+#ifdef TRISOLVE_TIMERS
+  time_outer = timer_total.seconds();
+  std::cout << "********************************" << std::endl; 
+  std::cout << "  (l)tri_solve_chain: setup = " << time_setup << std::endl;
+  std::cout << "  (l)tri_solve_chain: total loop = " << time_outer << std::endl;
+  std::cout << "  (l)tri_solve_chain: accum lvl solves = " << time_inner_total << std::endl;
+  std::cout << "********************************" << std::endl; 
+#endif
+
+#endif
+} // end lower_tri_solve_cg
+#endif
+
+
+
+template < class TriSolveHandle, class RowMapType, class EntriesType, class ValuesType, class RHSType, class LHSType >
+void lower_tri_solve_ncg( TriSolveHandle & thandle, const RowMapType row_map, const EntriesType entries, const ValuesType values, const RHSType & rhs, LHSType &lhs) {
+
+#if defined(KOKKOS_ENABLE_CUDA) && defined(KOKKOSPSTRSV_SOLVE_IMPL_PROFILE)
+cudaProfilerStop();
+#endif
+
+  typedef typename TriSolveHandle::execution_space execution_space;
+  typedef typename TriSolveHandle::size_type size_type;
+  typedef typename TriSolveHandle::nnz_lno_view_t NGBLType;
+
+#ifdef TRISOLVE_TIMERS
+  double time_outer = 0.0, time_inner_total = 0.0, time_setup = 0.0;
+  Kokkos::Timer timer_total;
+  Kokkos::Timer timer_inner;
+  Kokkos::Timer timer_setup;
+#endif
+
+  auto nlevels = thandle.get_num_levels();
+  // Keep this a host View, create device version and copy to back to host during scheduling
+  // This requires making sure the host view in the handle is properly updated after the symbolic phase
+  auto nodes_per_level = thandle.get_nodes_per_level();
+  auto hnodes_per_level = thandle.get_host_nodes_per_level();
+  //auto hnodes_per_level = Kokkos::create_mirror_view(nodes_per_level);
+  //Kokkos::deep_copy(hnodes_per_level, nodes_per_level);  
+
+  auto nodes_grouped_by_level = thandle.get_nodes_grouped_by_level();
+
+  size_type node_count = 0;
+#ifdef TRISOLVE_TIMERS
+    // time for setup
+    time_setup = timer_setup.seconds();
+    timer_total.reset();
+#endif
+
+  // This must stay serial; would be nice to try out Cuda's graph stuff to reduce kernel launch overhead
+
+  typedef Kokkos::TeamPolicy<execution_space> policy_type;
+  int team_size = thandle.get_team_size();
+  team_size = team_size == -1 ? 64 : team_size;
+
+  for ( size_type lvl = 0; lvl < nlevels; ++lvl ) 
+  {
+    size_type lvl_nodes = hnodes_per_level(lvl);
+
+#ifdef TRISOLVE_TIMERS
+    timer_inner.reset();
+#endif
+
+#if defined(KOKKOS_ENABLE_CUDA) && defined(KOKKOSPSTRSV_SOLVE_IMPL_PROFILE)
+cudaProfilerStart();
+#endif
+      //if ( thandle.get_algorithm() == KokkosSparse::Experimental::SPTRSVAlgorithm::SEQLVLSCHD_TP1 ) 
+      {
+
+#ifdef TRILVLSCHED
+        TriLvlSchedTP1SolverFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, true, node_count);
+#else
+        LowerTriLvlSchedTP1SolverFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, node_count);
+#endif
+          Kokkos::parallel_for("parfor_l_team", policy_type( lvl_nodes , team_size ), tstf);
+      }
+
+      node_count += lvl_nodes;
+
+#if defined(KOKKOS_ENABLE_CUDA) && defined(KOKKOSPSTRSV_SOLVE_IMPL_PROFILE)
+cudaProfilerStop();
+#endif
+#ifdef TRISOLVE_TIMERS
+    // FIXME Adding Kokkos::fence() for timing purposes - is it necessary if running on a single stream???
+    Kokkos::fence();
+    time_inner_total += timer_inner.seconds();
+#endif
+  } // scope for
+
+#ifdef TRISOLVE_TIMERS
+  time_outer = timer_total.seconds();
+  std::cout << "********************************" << std::endl; 
+  std::cout << "  (l)tri_solve_chain: setup = " << time_setup << std::endl;
+  std::cout << "  (l)tri_solve_chain: total loop = " << time_outer << std::endl;
+  std::cout << "  (l)tri_solve_chain: accum lvl solves = " << time_inner_total << std::endl;
+  std::cout << "********************************" << std::endl; 
+#endif
+
+} // end lower_tri_solve_ncg
+
+
+
+
 template < class TriSolveHandle, class RowMapType, class EntriesType, class ValuesType, class RHSType, class LHSType >
 void lower_tri_solve( TriSolveHandle & thandle, const RowMapType row_map, const EntriesType entries, const ValuesType values, const RHSType & rhs, LHSType &lhs) {
 
@@ -1580,7 +2212,10 @@ cudaProfilerStop();
 #endif
 
   // This must stay serial; would be nice to try out Cuda's graph stuff to reduce kernel launch overhead
+
+
   for ( size_type lvl = 0; lvl < nlevels; ++lvl ) {
+   {
     size_type lvl_nodes = hnodes_per_level(lvl);
 
 #ifdef TRISOLVE_TIMERS
@@ -1650,6 +2285,8 @@ cudaProfilerStop();
     Kokkos::fence();
     time_inner_total += timer_inner.seconds();
 #endif
+   } // scope for if-block
+
   } // end for lvl
 #ifdef TRISOLVE_TIMERS
   time_outer = timer_total.seconds();

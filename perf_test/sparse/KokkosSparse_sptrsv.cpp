@@ -66,6 +66,7 @@
 
 // Testing compilation with lapacke for dtrtri usage
 //#define KOKKOSKERNELS_SPTRSV_LAPACKE_TRSV
+//#define CHECKALLRUNRESULTS
 
 #ifdef KOKKOSKERNELS_SPTRSV_LAPACKE_TRSV
 #include "lapacke.h"
@@ -80,8 +81,8 @@ using namespace KokkosKernels;
 using namespace KokkosKernels::Experimental;
 
 //#define PRINT_DENSETRIMTX
-#define PRINT_HLEVEL_FREQ_PLOT
-#define PRINT_LEVEL_LIST
+//#define PRINT_HLEVEL_FREQ_PLOT
+//#define PRINT_LEVEL_LIST
 
 enum {DEFAULT, CUSPARSE, LVLSCHED_RP, LVLSCHED_TP1, LVLSCHED_TP2, LVLSCHED_TP1CHAIN, LVLSCHED_DENSEP_TP1, LVLSCHED_DENSEP_TP2};
 
@@ -440,8 +441,9 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
     }
 #endif
     // Error Check
-    scalar_t sum = 0.0;
     Kokkos::fence();
+    {
+    scalar_t sum = 0.0;
     Kokkos::parallel_reduce( Kokkos::RangePolicy<execution_space>(0, lhs.extent(0)), 
       KOKKOS_LAMBDA ( const lno_t i, scalar_t &tsum ) {
         tsum += lhs(i);
@@ -459,6 +461,7 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
     else {
      std::cout << "\nLower Tri Solve Init Test: SUCCESS!\n" << std::endl;
     }
+    }
 
   
     // Benchmark
@@ -472,6 +475,28 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
   
     if (test != CUSPARSE) {
       sptrsv_solve( &kh, row_map, entries, values, rhs, lhs );
+    #ifdef CHECKALLRUNRESULTS
+        {
+        scalar_t sum = 0.0;
+        Kokkos::parallel_reduce( Kokkos::RangePolicy<execution_space>(0, lhs.extent(0)), 
+          KOKKOS_LAMBDA ( const lno_t it, scalar_t &tsum ) {
+            tsum += lhs(it);
+          }, sum);
+      
+        if ( sum != lhs.extent(0) ) {
+          std::cout << "Lower Tri Solve FAILURE: sum = " << sum << std::endl;
+          auto hsoln = Kokkos::create_mirror_view(lhs);
+          Kokkos::deep_copy(hsoln, lhs);
+          for ( size_t it = 0; it < hsoln.extent(0); ++it ) {
+            std::cout << "lhs(" << it << ") = " << hsoln(it) << std::endl;
+          }
+          return 1;
+        }
+        else {
+         std::cout << "\nLower Tri Solve Init Test: SUCCESS!\n" << std::endl;
+        }
+        }
+    #endif
     }
 #ifdef KOKKOSKERNELS_ENABLE_TPL_CUSPARSE
     else {
@@ -786,6 +811,7 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
 #endif
     // Error Check
     Kokkos::fence();
+    {
     scalar_t sum = 0.0;
     Kokkos::parallel_reduce( Kokkos::RangePolicy<execution_space>(0, lhs.extent(0)), 
       KOKKOS_LAMBDA ( const lno_t i, scalar_t &tsum ) {
@@ -804,6 +830,7 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
     else {
      std::cout << "\nUpper Tri Solve Init Test: SUCCESS!\n" << std::endl;
     }
+    }
   
     // Benchmark
     Kokkos::fence();
@@ -816,6 +843,28 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
   
     if (test != CUSPARSE) {
       sptrsv_solve( &kh, row_map, entries, values, rhs, lhs );
+    #ifdef CHECKALLRUNRESULTS
+        {
+        scalar_t sum = 0.0;
+        Kokkos::parallel_reduce( Kokkos::RangePolicy<execution_space>(0, lhs.extent(0)), 
+          KOKKOS_LAMBDA ( const lno_t it, scalar_t &tsum ) {
+            tsum += lhs(it);
+          }, sum);
+      
+        if ( sum != scalar_t(lhs.extent(0)) ) {
+          std::cout << "Upper Tri Solve FAILURE: sum = " << sum << std::endl;
+          auto hsoln = Kokkos::create_mirror_view(lhs);
+          Kokkos::deep_copy(hsoln, lhs);
+          for ( size_t it = 0; it < hsoln.extent(0); ++it ) {
+            std::cout << "lhs(" << it << ") = " << hsoln(it) << std::endl;
+          }
+          return 1;
+        }
+        else {
+         std::cout << "\nUpper Tri Solve Init Test: SUCCESS!\n" << std::endl;
+        }
+        }
+    #endif
     }
 #ifdef KOKKOSKERNELS_ENABLE_TPL_CUSPARSE
     else {

@@ -55,6 +55,8 @@
 #include <KokkosSparse_sptrsv_symbolic_impl.hpp>
 #endif
 
+#define LTCUDAGRAPHTEST
+
 namespace KokkosSparse {
 namespace Impl {
 // Specialization struct which defines whether a specialization exists
@@ -182,7 +184,14 @@ struct SPTRSV_SOLVE<KernelHandle, RowMapType, EntriesType, ValuesType, BType, XT
       }
 #endif
       else {
+#if defined(LTCUDAGRAPHTEST) && defined(KOKKOS_ENABLE_CUDA) && 10000 < CUDA_VERSION
+        std::cout << "  lower_tri_solve_cg version" << std::endl;
+        Experimental::lower_tri_solve_cg( *sptrsv_handle, row_map, entries, values, b, x);
+        //Experimental::lower_tri_solve_ncg( *sptrsv_handle, row_map, entries, values, b, x);
+#else
+        std::cout << "  lower_tri_solve version" << std::endl;
         Experimental::lower_tri_solve( *sptrsv_handle, row_map, entries, values, b, x);
+#endif
       }
     }
     else {

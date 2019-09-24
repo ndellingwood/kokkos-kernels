@@ -109,7 +109,45 @@ public:
 
   typedef typename Kokkos::View<scalar_t **, HandlePersistentMemorySpace> mtx_scalar_view_t;
 
+#if defined(KOKKOS_ENABLE_CUDA) && 10000 < CUDA_VERSION
+  bool cudagraphCreated; // Move this later
+  struct cudaGraphWrapperType {
+    cudaGraph_t cudagraph;
+    cudaGraphExec_t cudagraphinstance;
+    cudaStream_t stream;
+
+    //cudaGraphWrapperType() { }
+    //~cudaGraphWrapperType() { }
+
+    //cudaStreamPerThread // This is a cuda runtime macro, will try and use it since we currently compile in a way that should support it...
+  };
+
+  typedef cudaGraphWrapperType SPTRSVcudaGraphWrapperType;
+
+  void create_SPTRSVcudaGraphWrapperType() {
+    destroy_SPTRSVcudaGraphWrapperType();
+      sptrsvCudaGraph = new SPTRSVcudaGraphWrapperType;
+    cudaStreamCreate(&sptrsvCudaGraph->stream);
+  }
+
+  void destroy_SPTRSVcudaGraphWrapperType() {
+    if(sptrsvCudaGraph != nullptr) {
+      cudaStreamDestroy(sptrsvCudaGraph->stream);
+      delete sptrsvCudaGraph;
+      sptrsvCudaGraph = nullptr;
+    }
+  }
+
+  SPTRSVcudaGraphWrapperType* get_sptrsvCudaGraph() {
+    return sptrsvCudaGraph;
+  }
+#endif
+
 private:
+
+#if defined(KOKKOS_ENABLE_CUDA) && 10000 < CUDA_VERSION
+  SPTRSVcudaGraphWrapperType *sptrsvCudaGraph;
+#endif
 
   size_type nrows;
 
@@ -246,6 +284,10 @@ private:
 public:
 
   SPTRSVHandle(SPTRSVAlgorithm choice, const size_type nrows_, bool lower_tri_, bool symbolic_complete_ = false) :
+#if defined(KOKKOS_ENABLE_CUDA) && 10000 < CUDA_VERSION
+    cudagraphCreated(false),
+    sptrsvCudaGraph(nullptr),
+#endif
     nrows(nrows_),
     lower_tri(lower_tri_),
     algm(choice),
@@ -576,13 +618,23 @@ public:
       h_chain_ptr = host_signed_nnz_lno_view_t();
       this->chain_threshold = -1;
     }
+
+#if defined(KOKKOS_ENABLE_CUDA) && 10000 < CUDA_VERSION
+    create_SPTRSVcudaGraphWrapperType();
+#endif
+
     set_num_chain_entries(0);
     set_symbolic_incomplete();
   }
 
 
 
-  virtual ~SPTRSVHandle() {};
+  virtual ~SPTRSVHandle() {
+#if defined(KOKKOS_ENABLE_CUDA) && 10000 < CUDA_VERSION
+    destroy_SPTRSVcudaGraphWrapperType();
+#endif
+  };
+
 
   bool algm_requires_symb_lvlsched() const { return require_symbolic_lvlsched_phase; } 
 
