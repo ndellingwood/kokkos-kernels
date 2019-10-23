@@ -51,6 +51,10 @@
 
 #define DENSEPARTITION
 
+#if defined(KOKKOS_ENABLE_CUDA) && 10000 < CUDA_VERSION
+#define KOKKOSKERNELS_SPTRSV_CUDAGRAPHSUPPORT
+#endif
+
 namespace KokkosSparse {
 namespace Experimental {
 

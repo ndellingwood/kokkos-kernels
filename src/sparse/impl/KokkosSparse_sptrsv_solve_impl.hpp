@@ -82,6 +82,9 @@ namespace Experimental {
 #if defined(KOKKOS_ENABLED_CUDA)
 #include "cuda_runtime.h"
 #include "cublas_v2.h"
+  #if defined(KOKKOS_ENABLE_CUDA) && 10000 < CUDA_VERSION
+  #define KOKKOSKERNELS_SPTRSV_CUDAGRAPHSUPPORT
+  #endif
 #endif
 
 struct UnsortedTag {};
@@ -1677,9 +1680,6 @@ void lower_tri_solve_cg( TriSolveHandle & thandle, const RowMapType row_map, con
     auto nlevels = thandle.get_num_levels();
     std::cout << "Begin Solve: nlevels = " << nlevels << std::endl;
 
-    int N = 1;
-    Kokkos::View<int*> a(Kokkos::ViewAllocateWithoutInitializing("A"),N);
-
     auto stream1 = lcl_cudagraph->stream;
     Kokkos::Cuda cuda1(stream1);
     auto graph = lcl_cudagraph->cudagraph;
@@ -1691,13 +1691,20 @@ void lower_tri_solve_cg( TriSolveHandle & thandle, const RowMapType row_map, con
     //cudaStreamCreate(&stream1);
    // Kokkos::Cuda cuda1(stream1);
 
-
 // WIthout this, funky error...
+#if 1
+    const int N = 1;
+    //Kokkos::View<int*> a(Kokkos::ViewAllocateWithoutInitializing("A"),N);
     Kokkos::parallel_for("Init",N,KOKKOS_LAMBDA (const int i) {
-      a(i) = i;
+      //a(i) = i;
     });
 
+    //Kokkos::fence();
+#else
     Kokkos::fence();
+    cudaStreamSynchronize(stream1);
+    Kokkos::fence();
+#endif
 
     typedef typename TriSolveHandle::nnz_lno_view_t NGBLType;
     typedef typename TriSolveHandle::execution_space execution_space;
@@ -1722,7 +1729,7 @@ void lower_tri_solve_cg( TriSolveHandle & thandle, const RowMapType row_map, con
 
         using policy_type = ReturnTeamPolicyType<execution_space>;
 
-        Kokkos::parallel_for("parfor_l_team_cudagraph", ReturnTeamPolicyType<execution_space>::get_policy(lvl_nodes,team_size,cuda1), LowerTriLvlSchedTP1SolverFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType>(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, node_count));
+        Kokkos::parallel_for("parfor_l_team_cudagraph",  Kokkos::Experimental::require(ReturnTeamPolicyType<execution_space>::get_policy(lvl_nodes,team_size,cuda1), Kokkos::Experimental::WorkItemProperty::HintLightWeight), LowerTriLvlSchedTP1SolverFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType>(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, node_count));
 
         node_count += hnodes_per_level(iter);
       }
