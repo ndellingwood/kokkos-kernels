@@ -99,6 +99,27 @@ void print_view1d(const ViewType dv) {
 }
 #endif
 
+template <class RowMapType, class EntriesType>
+void check_entries_sorted(const RowMapType drow_map, const EntriesType dentries) {
+  auto row_map = Kokkos::create_mirror_view(drow_map);
+  Kokkos::deep_copy(row_map,drow_map);
+  auto entries = Kokkos::create_mirror_view(dentries);
+  Kokkos::deep_copy(entries,dentries);
+
+  for (size_t row = 0; row < row_map.extent(0)-1; ++row) {
+    size_t start = row_map(row);
+    size_t end = row_map(row+1);
+    for (size_t offset = start; offset < end-1; ++offset) {
+      size_t pcol = entries(offset);
+      size_t ncol = entries(offset+1);
+      if (pcol > ncol) {
+        std::cout << "  UNSORTED!!" << std::endl;
+      }
+    }
+  }
+
+}
+
 template<typename Scalar>
 int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const std::string& ufilename, const int team_size, const int vector_length, const int idx_offset, const int loop, const int chain_threshold = 0, const float dense_row_percent = -1.0) {
 
@@ -159,6 +180,8 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
 
     std::cout << "Lower Perf: lhs.extent(0) = " << lhs.extent(0) << std::endl;
     std::cout << "Lower Perf: rhs.extent(0) = " << rhs.extent(0) << std::endl;
+
+    check_entries_sorted(row_map, entries);
 
 #ifdef PRINTVIEWSSPTRSVPERF
     print_view1d(row_map);
@@ -446,9 +469,27 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
     scalar_t sum = 0.0;
     Kokkos::parallel_reduce( Kokkos::RangePolicy<execution_space>(0, lhs.extent(0)), 
       KOKKOS_LAMBDA ( const lno_t i, scalar_t &tsum ) {
-        tsum += lhs(i);
+        tsum += (known_lhs(i) - lhs(i))*(known_lhs(i) - lhs(i));
       }, sum);
   
+    scalar_t norm_ssd = sqrt(sum / lhs.extent(0));
+    std::cout << "  ssd = " << sum << "  norm_sqrt_ssd = " << norm_ssd << std::endl;
+
+    if ( norm_ssd > 2e-14 ) {
+      std::cout << "Lower Tri Solve FAILURE: norm_ssd = " << norm_ssd << std::endl;
+      return 1;
+    }
+    else {
+     std::cout << "\nLower Tri Solve Init Test: SUCCESS!\n" << std::endl;
+    }
+
+      /*
+    sum = 0.0;
+    Kokkos::parallel_reduce( Kokkos::RangePolicy<execution_space>(0, lhs.extent(0)), 
+      KOKKOS_LAMBDA ( const lno_t i, scalar_t &tsum ) {
+        tsum += lhs(i);
+      }, sum);
+
     if ( sum != lhs.extent(0) ) {
       std::cout << "Lower Tri Solve FAILURE: sum = " << sum << std::endl;
       auto hsoln = Kokkos::create_mirror_view(lhs);
@@ -461,6 +502,7 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
     else {
      std::cout << "\nLower Tri Solve Init Test: SUCCESS!\n" << std::endl;
     }
+      */
     }
 
   
@@ -485,11 +527,13 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
       
         if ( sum != lhs.extent(0) ) {
           std::cout << "Lower Tri Solve FAILURE: sum = " << sum << std::endl;
+          /*
           auto hsoln = Kokkos::create_mirror_view(lhs);
           Kokkos::deep_copy(hsoln, lhs);
           for ( size_t it = 0; it < hsoln.extent(0); ++it ) {
             std::cout << "lhs(" << it << ") = " << hsoln(it) << std::endl;
           }
+          */
           return 1;
         }
         else {
@@ -641,6 +685,8 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
 
     std::cout << "Upper Perf: lhs.extent(0) = " << lhs.extent(0) << std::endl;
     std::cout << "Upper Perf: rhs.extent(0) = " << rhs.extent(0) << std::endl;
+
+    check_entries_sorted(row_map, entries);
 
 #ifdef PRINTVIEWSSPTRSVPERF
     print_view1d(row_map);
@@ -815,6 +861,24 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
     scalar_t sum = 0.0;
     Kokkos::parallel_reduce( Kokkos::RangePolicy<execution_space>(0, lhs.extent(0)), 
       KOKKOS_LAMBDA ( const lno_t i, scalar_t &tsum ) {
+        tsum += (known_lhs(i) - lhs(i))*(known_lhs(i) - lhs(i));
+      }, sum);
+  
+    scalar_t norm_ssd = sqrt(sum / lhs.extent(0));
+    std::cout << "  ssd = " << sum << "  norm_sqrt_ssd = " << norm_ssd << std::endl;
+
+    if ( norm_ssd > 2e-14 ) {
+      std::cout << "Lower Tri Solve FAILURE: norm_ssd = " << norm_ssd << std::endl;
+      return 1;
+    }
+    else {
+     std::cout << "\nLower Tri Solve Init Test: SUCCESS!\n" << std::endl;
+    }
+
+      /*
+    sum = 0.0;
+    Kokkos::parallel_reduce( Kokkos::RangePolicy<execution_space>(0, lhs.extent(0)), 
+      KOKKOS_LAMBDA ( const lno_t i, scalar_t &tsum ) {
         tsum += lhs(i);
       }, sum);
   
@@ -830,6 +894,7 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
     else {
      std::cout << "\nUpper Tri Solve Init Test: SUCCESS!\n" << std::endl;
     }
+      */
     }
   
     // Benchmark
@@ -853,11 +918,13 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
       
         if ( sum != scalar_t(lhs.extent(0)) ) {
           std::cout << "Upper Tri Solve FAILURE: sum = " << sum << std::endl;
+          /*
           auto hsoln = Kokkos::create_mirror_view(lhs);
           Kokkos::deep_copy(hsoln, lhs);
           for ( size_t it = 0; it < hsoln.extent(0); ++it ) {
             std::cout << "lhs(" << it << ") = " << hsoln(it) << std::endl;
           }
+          */
           return 1;
         }
         else {
