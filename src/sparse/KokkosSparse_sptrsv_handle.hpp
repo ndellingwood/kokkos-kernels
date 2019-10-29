@@ -136,6 +136,8 @@ public:
 
   void destroy_SPTRSVcudaGraphWrapperType() {
     if(sptrsvCudaGraph != nullptr) {
+      //cudaGraphExecDestroy(sptrsvCudaGraph->cudagraphinstance);
+      //cudaGraphDestroy(sptrsvCudaGraph->cudagraph);
       cudaStreamDestroy(sptrsvCudaGraph->stream);
       delete sptrsvCudaGraph;
       sptrsvCudaGraph = nullptr;
