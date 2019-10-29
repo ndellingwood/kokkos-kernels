@@ -81,7 +81,7 @@ using namespace KokkosKernels;
 using namespace KokkosKernels::Experimental;
 
 //#define PRINT_DENSETRIMTX
-//#define PRINT_HLEVEL_FREQ_PLOT
+#define PRINT_HLEVEL_FREQ_PLOT
 //#define PRINT_LEVEL_LIST
 
 enum {DEFAULT, CUSPARSE, LVLSCHED_RP, LVLSCHED_TP1, LVLSCHED_TP2, LVLSCHED_TP1CHAIN, LVLSCHED_DENSEP_TP1, LVLSCHED_DENSEP_TP2};
@@ -559,6 +559,7 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
 
     // Output for level frequency plot
     #ifdef PRINT_HLEVEL_FREQ_PLOT
+    if (test != CUSPARSE)
     {
     auto hnpl = kh.get_sptrsv_handle()->get_host_nodes_per_level();
     auto nlevels = kh.get_sptrsv_handle()->get_num_levels();
@@ -948,6 +949,7 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
 
     // Output for level frequency plot
     #ifdef PRINT_HLEVEL_FREQ_PLOT
+    if (test != CUSPARSE)
     {
     auto hnpl = kh.get_sptrsv_handle()->get_host_nodes_per_level();
     auto nlevels = kh.get_sptrsv_handle()->get_num_levels();

@@ -1714,7 +1714,7 @@ void lower_tri_solve_cg( TriSolveHandle & thandle, const RowMapType row_map, con
 
     size_type node_count = 0;
 
-    typedef Kokkos::TeamPolicy<execution_space> policy_type;
+    //typedef Kokkos::TeamPolicy<execution_space> policy_type;
     int team_size = thandle.get_team_size();
     team_size = team_size == -1 ? 64 : team_size;
 
