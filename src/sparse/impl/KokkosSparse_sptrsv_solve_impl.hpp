@@ -56,7 +56,7 @@
 #include <KokkosBatched_Trsv_Decl.hpp>
 #include <KokkosBatched_Trsv_Serial_Impl.hpp>
 
-#define TRISOLVE_TIMERS
+//#define TRISOLVE_TIMERS
 //#define TRISOLVE_TIMERS_ITER_OUTPUT
 //
 //#define LVL_OUTPUT_INFO
@@ -1692,18 +1692,16 @@ void lower_tri_solve_cg( TriSolveHandle & thandle, const RowMapType row_map, con
    // Kokkos::Cuda cuda1(stream1);
 
 // WIthout this, funky error...
-#if 1
-    const int N = 1;
-    //Kokkos::View<int*> a(Kokkos::ViewAllocateWithoutInitializing("A"),N);
-    Kokkos::parallel_for("Init",N,KOKKOS_LAMBDA (const int i) {
-      //a(i) = i;
+#if 0
+    Kokkos::parallel_for("Init",1,KOKKOS_LAMBDA (const int i) {
     });
 
     //Kokkos::fence();
 #else
-    Kokkos::fence();
+    Kokkos::Cuda().fence();
+//    Kokkos::fence();
     cudaStreamSynchronize(stream1);
-    Kokkos::fence();
+//    Kokkos::fence();
 #endif
 
     typedef typename TriSolveHandle::nnz_lno_view_t NGBLType;
