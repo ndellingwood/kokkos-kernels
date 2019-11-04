@@ -974,7 +974,7 @@ struct LowerTriLvlSchedTP1SingleBlockFunctor
             tdiff -= val*lhs(colid);
           }
         }, diff);
-        team.team_barrier();
+      //  team.team_barrier(); // causes deadlock due to some threads not entering this if-block
 #endif
         // ASSUMPTION: sorted diagonal value located at eoffset - 1
         lhs(rowid) = (rhs_val+diff)/values(eoffset-1);
@@ -1068,7 +1068,7 @@ struct LowerTriLvlSchedTP1SingleBlockFunctor
             tdiff -= val*lhs(colid);
           }
         },diff);
-        team.team_barrier();
+        //team.team_barrier();
 #endif
         // ASSUMPTION: sorted diagonal value located at eoffset - 1 for lower tri, soffset for upper tri
           lhs(rowid) = (rhs_val+diff)/values(eoffset-1);
@@ -1175,7 +1175,7 @@ struct UpperTriLvlSchedTP1SingleBlockFunctor
             tdiff -= val*lhs(colid);
           }
         }, diff);
-        team.team_barrier();
+        //team.team_barrier();
 #endif
         // ASSUMPTION: sorted diagonal value located at soffset
         lhs(rowid) = (rhs_val+diff)/values(soffset);
@@ -1265,7 +1265,7 @@ struct UpperTriLvlSchedTP1SingleBlockFunctor
             tdiff -= val*lhs(colid);
           }
         }, diff);
-        team.team_barrier();
+        //team.team_barrier();
 #endif
         // ASSUMPTION: sorted diagonal value located at eoffset - 1 for lower tri, soffset for upper tri
           lhs(rowid) = (rhs_val+diff)/values(soffset);
@@ -1392,7 +1392,7 @@ struct TriLvlSchedTP1SingleBlockFunctor
             tdiff -= val*lhs(colid);
           }
         }, diff);
-      team.team_barrier();
+      //team.team_barrier();
 #endif
 
         // ASSUMPTION: sorted diagonal value located at eoffset - 1 for lower tri, soffset for upper tri
@@ -1491,7 +1491,7 @@ struct TriLvlSchedTP1SingleBlockFunctor
           }
         }, diff);
 
-        team.team_barrier();
+        //team.team_barrier();
 #endif
 
         // ASSUMPTION: sorted diagonal value located at eoffset - 1 for lower tri, soffset for upper tri
@@ -2811,6 +2811,7 @@ cudaProfilerStop();
   using SingleBlockFunctor = TriLvlSchedTP1SingleBlockFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType>;
 
   int team_size = thandle.get_team_size();
+  int vector_size = thandle.get_vector_size() > 0 ? thandle.get_vector_size() : 1;
 
   auto cutoff = thandle.get_chain_threshold();
   int team_size_singleblock = team_size;
@@ -2853,12 +2854,12 @@ cudaProfilerStop();
         LowerTriLvlSchedTP1SolverFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, node_count);
 #endif
         if (team_size == - 1) {
-          team_size = policy_type(1, 1, 1).team_size_recommended(tstf, Kokkos::ParallelForTag());
+          team_size = policy_type(1, 1, vector_size).team_size_recommended(tstf, Kokkos::ParallelForTag());
         }
 
         // TODO To use cudagraph here, need to know how many non-unit chains there are, create a graph for each and launch accordingly
         size_type lvl_nodes = hnodes_per_level(schain); //lvl == echain????
-        Kokkos::parallel_for("parfor_l_team_chain1", policy_type( lvl_nodes , team_size ), tstf);
+        Kokkos::parallel_for("parfor_l_team_chain1", policy_type(lvl_nodes , team_size, vector_size), tstf);
         node_count += lvl_nodes;
         //std::cout << "  schain: " << schain << "  lvl_nodes: " << lvl_nodes << "  updated node_count: " << node_count << std::endl;
 
@@ -2871,7 +2872,7 @@ cudaProfilerStop();
         }
 
         if (team_size_singleblock <= 0) {
-          team_size_singleblock = policy_type(1, 1, 1).team_size_recommended(SingleBlockFunctor(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, nodes_per_level, node_count, schain, echain, is_lowertri), Kokkos::ParallelForTag());
+          team_size_singleblock = policy_type(1, 1, vector_size).team_size_recommended(SingleBlockFunctor(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, nodes_per_level, node_count, schain, echain, is_lowertri), Kokkos::ParallelForTag());
         }
 
         if (cutoff <= team_size_singleblock) {
@@ -2880,7 +2881,7 @@ cudaProfilerStop();
 #else
           LowerTriLvlSchedTP1SingleBlockFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, nodes_per_level, node_count, schain, echain);
 #endif
-          Kokkos::parallel_for("parfor_l_team_chainmulti", policy_type(1, team_size_singleblock), tstf);
+          Kokkos::parallel_for("parfor_l_team_chainmulti", policy_type(1, team_size_singleblock, vector_size), tstf);
         }
         else {
           // team_size_singleblock < cutoff => kernel must allow for a block-stride internally
@@ -2889,7 +2890,7 @@ cudaProfilerStop();
 #else
           LowerTriLvlSchedTP1SingleBlockFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, nodes_per_level, node_count, schain, echain, cutoff);
 #endif
-          Kokkos::parallel_for("parfor_l_team_chainmulti_cutoff", large_cutoff_policy_type(1, team_size_singleblock), tstf);
+          Kokkos::parallel_for("parfor_l_team_chainmulti_cutoff", large_cutoff_policy_type(1, team_size_singleblock, vector_size), tstf);
         }
         node_count += lvl_nodes;
       }
@@ -2912,12 +2913,12 @@ cudaProfilerStop();
         UpperTriLvlSchedTP1SolverFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, node_count);
 #endif
         if (team_size == - 1) {
-          team_size = policy_type(1, 1, 1).team_size_recommended(tstf, Kokkos::ParallelForTag());
+          team_size = policy_type(1, 1, vector_size).team_size_recommended(tstf, Kokkos::ParallelForTag());
         }
 
         // TODO To use cudagraph here, need to know how many non-unit chains there are, create a graph for each and launch accordingly
         size_type lvl_nodes = hnodes_per_level(schain); //lvl == echain????
-        Kokkos::parallel_for("parfor_u_team_chain1", policy_type( lvl_nodes , team_size ), tstf);
+        Kokkos::parallel_for("parfor_u_team_chain1", policy_type(lvl_nodes , team_size, vector_size), tstf);
         node_count += lvl_nodes;
         //std::cout << "  schain: " << schain << "  lvl_nodes: " << lvl_nodes << "  updated node_count: " << node_count << std::endl;
 
@@ -2931,7 +2932,7 @@ cudaProfilerStop();
 
         if (team_size_singleblock <= 0) {
           //team_size_singleblock = policy_type(1, 1, 1).team_size_recommended(SingleBlockFunctor(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, is_lowertri, node_count), Kokkos::ParallelForTag());
-          team_size_singleblock = policy_type(1, 1, 1).team_size_recommended(SingleBlockFunctor(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, nodes_per_level, node_count, schain, echain, is_lowertri), Kokkos::ParallelForTag());
+          team_size_singleblock = policy_type(1, 1, vector_size).team_size_recommended(SingleBlockFunctor(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, nodes_per_level, node_count, schain, echain, is_lowertri), Kokkos::ParallelForTag());
         }
 
         if (cutoff <= team_size_singleblock) {
@@ -2940,7 +2941,7 @@ cudaProfilerStop();
 #else
           UpperTriLvlSchedTP1SingleBlockFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, nodes_per_level, node_count, schain, echain);
 #endif
-          Kokkos::parallel_for("parfor_u_team_chainmulti", policy_type(1, team_size_singleblock), tstf);
+          Kokkos::parallel_for("parfor_u_team_chainmulti", policy_type(1, team_size_singleblock, vector_size), tstf);
         }
         else {
           // team_size_singleblock < cutoff => kernel must allow for a block-stride internally
@@ -2949,7 +2950,7 @@ cudaProfilerStop();
 #else
           UpperTriLvlSchedTP1SingleBlockFunctor<RowMapType, EntriesType, ValuesType, LHSType, RHSType, NGBLType> tstf(row_map, entries, values, lhs, rhs, nodes_grouped_by_level, nodes_per_level, node_count, schain, echain, cutoff);
 #endif
-          Kokkos::parallel_for("parfor_u_team_chainmulti_cutoff", large_cutoff_policy_type(1, team_size_singleblock), tstf);
+          Kokkos::parallel_for("parfor_u_team_chainmulti_cutoff", large_cutoff_policy_type(1, team_size_singleblock, vector_size), tstf);
         }
         node_count += lvl_nodes;
       }

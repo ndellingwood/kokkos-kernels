@@ -385,7 +385,7 @@ void lower_tri_symbolic (TriSolveHandle &thandle, const RowMapType drow_map, con
   std::cout << "  devicecheck_count= " << check_count << std::endl;
   }
 #endif
-#if 1//def PRINT1DVIEWSSYMB
+#ifdef PRINT1DVIEWSSYMB
   print_view1d_symbolic(hdep_tree);
 #endif
  }
@@ -597,7 +597,7 @@ void upper_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, co
   }
 #endif
 
-#if 1//def PRINT1DVIEWSSYMB
+#ifdef PRINT1DVIEWSSYMB
   print_view1d_symbolic(hdep_tree);
 #endif
 

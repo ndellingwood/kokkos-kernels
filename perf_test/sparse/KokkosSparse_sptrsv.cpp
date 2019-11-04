@@ -265,6 +265,7 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
         kh.create_sptrsv_handle(SPTRSVAlgorithm::SEQLVLSCHD_TP1CHAIN, nrows, is_lower_tri);
         kh.get_sptrsv_handle()->reset_chain_threshold(chain_threshold);
         if (team_size != -1) kh.get_sptrsv_handle()->set_team_size(team_size);
+        if (vector_length != -1) kh.get_sptrsv_handle()->set_vector_size(vector_length);
         kh.get_sptrsv_handle()->print_algorithm();
         break;
       case LVLSCHED_TP2:
@@ -769,6 +770,7 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
         kh.create_sptrsv_handle(SPTRSVAlgorithm::SEQLVLSCHD_TP1CHAIN, nrows, is_lower_tri);
         kh.get_sptrsv_handle()->reset_chain_threshold(chain_threshold);
         if (team_size != -1) kh.get_sptrsv_handle()->set_team_size(team_size);
+        if (vector_length != -1) kh.get_sptrsv_handle()->set_vector_size(vector_length);
         kh.get_sptrsv_handle()->print_algorithm();
         break;
       case LVLSCHED_TP2:
