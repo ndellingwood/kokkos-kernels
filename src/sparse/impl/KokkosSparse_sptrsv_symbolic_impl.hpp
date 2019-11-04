@@ -65,7 +65,6 @@ namespace KokkosSparse {
 namespace Impl {
 namespace Experimental {
 
-#ifdef PRINT1DVIEWSSYMB
 template <class ViewType>
 void print_view1d_symbolic(const ViewType dv) {
   auto v = Kokkos::create_mirror_view(dv);
@@ -76,8 +75,8 @@ void print_view1d_symbolic(const ViewType dv) {
   }
   std::cout << std::endl;
 }
-#endif
 
+// TODO Add "max" chain length mcl
 template < class TriSolveHandle, class NPLViewType >
 void symbolic_chain_phase(TriSolveHandle &thandle, const NPLViewType &nodes_per_level) {
 
@@ -86,7 +85,7 @@ void symbolic_chain_phase(TriSolveHandle &thandle, const NPLViewType &nodes_per_
 #endif
   typedef typename TriSolveHandle::size_type size_type;
 
-  size_type level = thandle.get_num_levels();
+  size_type nlevels = thandle.get_num_levels();
 
   // Create the chain now
   // FIXME Implementations will need to be templated on exec space it seems...
@@ -96,56 +95,56 @@ void symbolic_chain_phase(TriSolveHandle &thandle, const NPLViewType &nodes_per_
   std::cout << "SYMB Call CHAIN version" << std::endl;
   auto h_chain_ptr = thandle.get_host_chain_ptr();
   h_chain_ptr(0) = 0;
-  size_type chain_length = 0;
+  size_type chainlinks_length = 0;
   size_type num_chain_entries = 0;
-  int update_chain = 0;
+  int chain_state = 0;
   //const int cutoff = std::is_same<typename Kokkos::DefaultExecutionSpace::memory_space, Kokkos::HostSpace>::value ? 1 : 256; // TODO chain cutoff hard-coded to 256: make this a "threshold" parameter in the handle
   const int cutoff = cutoff_threshold;
   std::cout << "  cutoff_thresh = " << cutoff << std::endl;
-  for ( size_type i = 0; i < level; ++i ) {
+  for ( size_type i = 0; i < nlevels; ++i ) {
     auto cnpl = nodes_per_level(i);
-    //std::cout << "incre chain_length  npl(" << i << ") = " << nodes_per_level(i) << std::endl;
+    //std::cout << "incre chainlinks_length  npl(" << i << ") = " << nodes_per_level(i) << std::endl;
     if (cnpl <= cutoff) {
-      // this level may be part of a chain passed to the "single_block" solver to reduce kernel launches
-      chain_length += 1;
+      // this nlevels may be part of a chain passed to the "single_block" solver to reduce kernel launches
+      chainlinks_length += 1;
     }
     else {
       // Too many levels to run on single block...
-      // If first lvl <= cutoff but next level isn't, the two aren't separately updated and info is lost...
-      // if chain_length > 0, take path so that chain-links updated, then current too large chain updated (i.e. 2 updates); if chain_length == 0, then no previous chains and only one update required (npl too large for single-block
-      update_chain = chain_length > 0 ? 2 : 1;
+      // If first lvl <= cutoff but next nlevels isn't, the two aren't separately updated and info is lost...
+      // if chainlinks_length > 0, take path so that chain-links updated, then current too large chain updated (i.e. 2 updates); if chainlinks_length == 0, then no previous chains and only one update required (npl too large for single-block
+      chain_state = chainlinks_length > 0 ? 2 : 1;
     }
 
-    // if we hit final level before a trigger to update the chain, than override it - in this case, there was not a larger value to miss cutoff and reset the update
-    if ( update_chain == 0 && i == level-1 ) { update_chain = 1; }
+    // if we hit final nlevels before a trigger to update the chain, than override it - in this case, there was not a larger value to miss cutoff and reset the update
+    if ( chain_state == 0 && i == nlevels-1 ) { chain_state = 1; }
 
 
-    if (update_chain == 1) {
+    if (chain_state == 1) {
       num_chain_entries += 1;
-      //std::cout << "  nce = " << num_chain_entries << "  chain_length = " << chain_length << std::endl;
-      if (chain_length == 0) {
+      //std::cout << "  nce = " << num_chain_entries << "  chainlinks_length = " << chainlinks_length << std::endl;
+      if (chainlinks_length == 0) {
         h_chain_ptr(num_chain_entries) = h_chain_ptr(num_chain_entries-1) + 1;
       }
       else {
-        h_chain_ptr(num_chain_entries) = h_chain_ptr(num_chain_entries-1) + chain_length;
+        h_chain_ptr(num_chain_entries) = h_chain_ptr(num_chain_entries-1) + chainlinks_length;
       }
-      chain_length = 0; //reset
-      update_chain = 0; //reset
+      chainlinks_length = 0; //reset
+      chain_state = 0; //reset
     }
-
-    // Two updates required - should only occur if chain_length > 0
-    if (update_chain == 2) {
-      if (chain_length == 0) { std::cout << "MAJOR LOGIC ERROR! TERMINATE!" << std::endl; exit(-1); }
+    // Two updates required - should only occur if chainlinks_length > 0
+    // We have found two things: a non-one length chain, and a subsequent one length chain
+    if (chain_state == 2) {
+      if (chainlinks_length == 0) { std::cout << "MAJOR LOGIC ERROR! TERMINATE!" << std::endl; exit(-1); }
 
       num_chain_entries += 1;
-      h_chain_ptr(num_chain_entries) = h_chain_ptr(num_chain_entries-1) + chain_length;
-      //std::cout << "  nce = " << num_chain_entries << "  chain_length = " << chain_length << std::endl;
+      h_chain_ptr(num_chain_entries) = h_chain_ptr(num_chain_entries-1) + chainlinks_length;
+      //std::cout << "  nce = " << num_chain_entries << "  chainlinks_length = " << chainlinks_length << std::endl;
 
       num_chain_entries += 1;
       h_chain_ptr(num_chain_entries) = h_chain_ptr(num_chain_entries-1) + 1;
 
-      chain_length = 0; //reset
-      update_chain = 0; //reset
+      chainlinks_length = 0; //reset
+      chain_state = 0; //reset
     }
   }
   thandle.set_num_chain_entries(num_chain_entries);
@@ -256,6 +255,12 @@ void lower_tri_symbolic (TriSolveHandle &thandle, const RowMapType drow_map, con
   size_type node_count = 0;
 #endif
 
+  // New parent dependency tree
+  /*
+  HostSignedEntriesType parent(Kokkos::ViewAllocateWithoutInitializing("parent"), nrows);
+  Kokkos::deep_copy(parent, -1);
+  */
+
   while (node_count < nrows) {
 
 #ifdef SYMB_INIT_ASSUME_LVL
@@ -276,9 +281,12 @@ void lower_tri_symbolic (TriSolveHandle &thandle, const RowMapType drow_map, con
           // FIXME: For lower_tri, colid is unchanged; shifted for upper_tri...
           if ( previous_level_list(col) == -1 && col != row ) { // unmarked
             if ( col < row ) {
+              if (hdep_tree(col) == -1 || hdep_tree(col) > row) {
+                hdep_tree(col) = row;
+              }
               //std::cout << "  NOT ROOT: col = " << col << "  row = " << row << std::endl;
               is_root = false;
-              hdep_tree(row) = col; // can have multiple cols - all that matters is the final
+              //hdep_tree(row) = col; // can have multiple cols - all that matters is the final
               break;
             }
           }
@@ -377,7 +385,9 @@ void lower_tri_symbolic (TriSolveHandle &thandle, const RowMapType drow_map, con
   std::cout << "  devicecheck_count= " << check_count << std::endl;
   }
 #endif
-
+#if 1//def PRINT1DVIEWSSYMB
+  print_view1d_symbolic(hdep_tree);
+#endif
  }
 
 #ifdef TRISOLVE_SYMB_TIMERS
@@ -464,6 +474,12 @@ void upper_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, co
   size_type node_count = 0;
 #endif
 
+  // New parent dependency tree
+  /*
+  HostSignedEntriesType parent(Kokkos::ViewAllocateWithoutInitializing("parent"), nrows);
+  Kokkos::deep_copy(parent, -1);
+  */
+
   while (node_count < nrows) {
 
 #ifdef SYMB_INIT_ASSUME_LVL
@@ -489,10 +505,13 @@ void upper_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, co
           // FIXME: This check for col != row vs col > row will be broken with partial persist_sptrimtx, since using a row_map with rowid shifted to 0 but not colid
           // May need to fix row instead, using the shift, so that level_list stores the original rowid for the solve??
           // FIXME: Or, is it that the solve needs similar colid adjustment as done here????
-          if ( previous_level_list(col) == -1 && col != row ) { // unmarked
+          if (previous_level_list(col) == -1 && col != row) { // unmarked
             if ( col > row ) {
+              if (hdep_tree(col) == -1 || hdep_tree(col) < row) {
+                hdep_tree(col) = row;
+              }
               is_root = false;
-              hdep_tree(row) = col; // can have multiple cols - all that matters is the final
+              //hdep_tree(row) = col; // can have multiple cols - all that matters is the final
               break;
             }
           }
@@ -576,6 +595,10 @@ void upper_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, co
     }, check_count);
   std::cout << "  devicecheck_count= " << check_count << std::endl;
   }
+#endif
+
+#if 1//def PRINT1DVIEWSSYMB
+  print_view1d_symbolic(hdep_tree);
 #endif
 
  }

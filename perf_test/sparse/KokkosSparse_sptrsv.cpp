@@ -97,6 +97,9 @@ void print_view1d(const ViewType dv) {
   }
   std::cout << std::endl;
 }
+#else
+template <class ViewType>
+void print_view1d(const ViewType /*dv*/) {}
 #endif
 
 template <class RowMapType, class EntriesType>
