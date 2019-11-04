@@ -82,7 +82,7 @@ using namespace KokkosKernels::Experimental;
 
 //#define PRINT_DENSETRIMTX
 #define PRINT_HLEVEL_FREQ_PLOT
-//#define PRINT_LEVEL_LIST
+#define PRINT_LEVEL_LIST
 
 enum {DEFAULT, CUSPARSE, LVLSCHED_RP, LVLSCHED_TP1, LVLSCHED_TP2, LVLSCHED_TP1CHAIN, LVLSCHED_DENSEP_TP1, LVLSCHED_DENSEP_TP2};
 
@@ -611,11 +611,11 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
     else {
       std::cout << "OUTFILE DID NOT OPEN!!!" << std::endl;
     }
-
     }
     #endif
 
     #ifdef PRINT_LEVEL_LIST
+    if (test != CUSPARSE)
     {
     auto level_list = kh.get_sptrsv_handle()->get_level_list();
     auto hlevel_list = Kokkos::create_mirror_view(level_list);
@@ -978,7 +978,7 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
     }
 
     auto hngpl = kh.get_sptrsv_handle()->get_host_nodes_grouped_by_level();
-    filename = "lower_nodes_groupby_level_" + algmstring + ".txt";
+    filename = "upper_nodes_groupby_level_" + algmstring + ".txt";
     std::cout << filename << std::endl;
     outfile.open(filename);
     if (outfile.is_open()) {
@@ -1004,7 +1004,9 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
     }
     }
     #endif
+
     #ifdef PRINT_LEVEL_LIST
+    if (test != CUSPARSE)
     {
     auto level_list = kh.get_sptrsv_handle()->get_level_list();
     auto hlevel_list = Kokkos::create_mirror_view(level_list);
@@ -1015,7 +1017,7 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
     std::string algmstring = kh.get_sptrsv_handle()->return_algorithm_string();
     std::cout << algmstring << std::endl;
     // Create filename
-    std::string filename = "lower_level_list_" + algmstring + ".txt";
+    std::string filename = "upper_level_list_" + algmstring + ".txt";
     std::cout << filename << std::endl;
     std::cout << "  nlevels = " << nlevels << "  nodes = " << hlevel_list.extent(0) << std::endl;
     std::ofstream outfile;
