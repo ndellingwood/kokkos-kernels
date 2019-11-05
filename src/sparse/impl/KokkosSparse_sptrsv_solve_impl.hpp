@@ -1763,6 +1763,7 @@ struct TriLvlSchedTP1SingleBlockFunctorDiagValues
 //              Replace TeamThreadRange (which is allowing threads to cooperate over the solve...) with a for loop, then TeamVectorRange
 // Round 2: Use TeamVectorRange Policy
 
+#ifdef SERIAL_FOR_LOOP
         for (auto ptr = soffset; ptr < eoffset; ++ptr) {
 
    // FIXME Need to pass dense_rows to these functors...
@@ -1782,6 +1783,28 @@ struct TriLvlSchedTP1SingleBlockFunctorDiagValues
             diff -= val*lhs(colid);
           }
         }
+#else
+      auto trange = eoffset - soffset;
+      Kokkos::parallel_reduce(Kokkos::ThreadVectorRange(team, trange), [&] (const int loffset, scalar_t& tdiff)
+      {
+        auto ptr = soffset + loffset;
+#ifdef DENSEPARTITION
+          auto original_col = entries(ptr);
+          auto colid = is_lowertri ? original_col : original_col - dense_nrows; //shift required for upper-tri
+          //auto colid = original_col - dense_nrows; //shift required for upper-tri
+#else
+          auto colid = entries(ptr);
+#endif
+
+          auto val   = values(ptr);
+#ifdef CHAIN_DEBUG_OUTPUT
+          printf("  ptr: %d  colid: %d  val: %lf  rank: %d\n", (int)ptr, (int)colid, val, team.team_rank());
+#endif
+          if ( colid != rowid ) {
+            tdiff -= val*lhs(colid);
+          }
+      }, diff);
+#endif
         // ASSUMPTION: sorted diagonal value located at eoffset - 1 for lower tri, soffset for upper tri
         lhs(rowid) = (rhs_val+diff)/diagonal_values(rowid);
       } // end if team.team_rank() < nodes_this_lvl
@@ -1832,6 +1855,7 @@ struct TriLvlSchedTP1SingleBlockFunctorDiagValues
 //              Replace TeamThreadRange (which is allowing threads to cooperate over the solve...) with a for loop, then TeamVectorRange
 // Round 2: Use TeamVectorRange Policy
 
+#ifdef SERIAL_FOR_LOOP
         for (auto ptr = soffset; ptr < eoffset; ++ptr) {
 #ifdef DENSEPARTITION
           auto original_col = entries(ptr);
@@ -1848,6 +1872,27 @@ struct TriLvlSchedTP1SingleBlockFunctorDiagValues
             diff -= val*lhs(colid);
           }
         }
+#else
+      auto trange = eoffset - soffset;
+      Kokkos::parallel_reduce(Kokkos::ThreadVectorRange(team, trange), [&] (const int loffset, scalar_t& tdiff)
+      {
+        auto ptr = soffset + loffset;
+#ifdef DENSEPARTITION
+          auto original_col = entries(ptr);
+          auto colid = is_lowertri ? original_col : original_col - dense_nrows; //shift required for upper-tri
+          //auto colid = original_col - dense_nrows; //shift required for upper-tri
+#else
+          auto colid = entries(ptr);
+#endif
+          auto val   = values(ptr);
+#ifdef CHAIN_DEBUG_OUTPUT
+          printf("  ptr: %d  colid: %d  val: %lf  rank: %d\n", (int)ptr, (int)colid, val, team.team_rank());
+#endif
+          if ( colid != rowid ) {
+            tdiff -= val*lhs(colid);
+          }
+        }, diff);
+#endif
         lhs(rowid) = (rhs_val+diff)/diagonal_values(rowid);
        } // end if team.team_rank() < nodes_this_lvl
       } // end for my_rank loop
