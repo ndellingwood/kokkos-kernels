@@ -52,10 +52,10 @@
 #include <KokkosSparse_sptrsv_handle.hpp>
 
 #define TRISOLVE_SYMB_TIMERS
-#define LVL_OUTPUT_INFO
-#define CHAIN_LVL_OUTPUT_INFO
-#define PRINT1DVIEWSSYMB
-#define DEBUGSYMBDENSE
+//#define LVL_OUTPUT_INFO
+//#define CHAIN_LVL_OUTPUT_INFO
+//#define PRINT1DVIEWSSYMB
+//#define DEBUGSYMBDENSE
 //#define SYMB_DIAG_CHECK
 //
 //#define SYMB_INIT_ASSUME_LVL
@@ -873,12 +873,6 @@ void numeric_dense_partition_algm(TriSolveHandle &thandle, const RowMapType drow
     //throw std::runtime_error ("  numeric error: diagonal_values different size than diagonal_offsets");
     std::runtime_error ("  numeric error: diagonal_values different size than diagonal_offsets");
   }
-  std::cout << "  diagonal_offsets.extent(0) = " << diagonal_offsets.extent(0) << std::endl;
-  std::cout << "  diagonal_values.extent(0) = " << diagonal_values.extent(0) << std::endl;
-  std::cout << "  dvalues.extent(0) = " << dvalues.extent(0) << std::endl;
-  print_view1d_symbolic(dvalues);
-  print_view1d_symbolic(diagonal_offsets, sptrimtx_nrows);
-  print_view1d_symbolic(diagonal_values, sptrimtx_nrows);
 
   //Kokkos::parallel_for("Store diagonal entries by rowid", Kokkos::RangePolicy<Kokkos::DefaultExecutionSpace>(0, diagonal_offsets.extent(0)), 
   Kokkos::parallel_for("Store diagonal entries by rowid", Kokkos::RangePolicy<Kokkos::DefaultExecutionSpace>(0, sptrimtx_nrows), 
@@ -889,6 +883,14 @@ void numeric_dense_partition_algm(TriSolveHandle &thandle, const RowMapType drow
     });
   Kokkos::fence();
 
+#ifdef PRINT1DVIEWSSYMB
+  std::cout << "  diagonal_offsets.extent(0) = " << diagonal_offsets.extent(0) << std::endl;
+  std::cout << "  diagonal_values.extent(0) = " << diagonal_values.extent(0) << std::endl;
+  std::cout << "  dvalues.extent(0) = " << dvalues.extent(0) << std::endl;
+  print_view1d_symbolic(dvalues);
+  print_view1d_symbolic(diagonal_offsets, sptrimtx_nrows);
+  print_view1d_symbolic(diagonal_values, sptrimtx_nrows);
+#endif
 
   std::cout << "  numeric complete" << std::endl;
 

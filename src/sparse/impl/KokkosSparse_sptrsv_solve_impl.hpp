@@ -94,18 +94,17 @@ struct UnsortedTag {};
 
 struct LargerCutoffTag {};
 
-#ifdef PRINT1DVIEWS
 template <class ViewType>
-void print_view1d_solve(const ViewType dv) {
+void print_view1d_solve(const ViewType dv, size_t range = 0) {
   auto v = Kokkos::create_mirror_view(dv);
   Kokkos::deep_copy(v, dv);
   std::cout << "Output for view " << v.label() << std::endl;
-  for (size_t i = 0; i < v.extent(0); ++i) {
+  range = range == 0 ? dv.extent(0) : range;
+  for (size_t i = 0; i < range; ++i) {
     std::cout << "v(" << i << ") = " << v(i) << " , ";
   }
   std::cout << std::endl;
 }
-#endif
 
 
 // This functor unifies the lower and upper implementations, the hope is the "is_lowertri" check does not add noticable time on larger problems
