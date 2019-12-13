@@ -52,11 +52,12 @@
 #include <KokkosSparse_sptrsv_handle.hpp>
 
 #define TRISOLVE_SYMB_TIMERS
-//#define LVL_OUTPUT_INFO
-//#define CHAIN_LVL_OUTPUT_INFO
-//#define PRINT1DVIEWSSYMB
-//#define DEBUGSYMBDENSE
+#define LVL_OUTPUT_INFO
+#define CHAIN_LVL_OUTPUT_INFO
+#define PRINT1DVIEWSSYMB
+#define DEBUGSYMBDENSE
 //#define SYMB_DIAG_CHECK
+//
 //#define SYMB_INIT_ASSUME_LVL
 
 // TODO Pass values array and store diagonal entries - should this always be done or optional?
@@ -66,17 +67,27 @@ namespace Impl {
 namespace Experimental {
 
 template <class ViewType>
-void print_view1d_symbolic(const ViewType dv) {
+void print_view1d_symbolic(const ViewType dv, size_t range = 0) {
   auto v = Kokkos::create_mirror_view(dv);
   Kokkos::deep_copy(v, dv);
   std::cout << "Output for view " << v.label() << std::endl;
-  for (size_t i = 0; i < v.extent(0); ++i) {
+  range = range == 0 ? dv.extent(0) : range;
+  for (size_t i = 0; i < range; ++i) {
     std::cout << "v(" << i << ") = " << v(i) << " , ";
   }
   std::cout << std::endl;
 }
 
-// TODO Add "max" chain length mcl
+
+// Usage:
+  // for c in [0, num_chain_entries)
+  //   s = h_chain_ptr(c); e = h_chain_ptr(c+1);
+  //   num_levels_in_current_chain = e - s;
+  //   if nlicc > 256
+  //     call current_alg
+  //   else
+  //     call single_block(s,e)
+
 template < class TriSolveHandle, class NPLViewType >
 void symbolic_chain_phase(TriSolveHandle &thandle, const NPLViewType &nodes_per_level) {
 
@@ -90,20 +101,15 @@ void symbolic_chain_phase(TriSolveHandle &thandle, const NPLViewType &nodes_per_
   // Create the chain now
   // FIXME Implementations will need to be templated on exec space it seems...
  auto cutoff_threshold = thandle.get_chain_threshold();
- //thandle.print_algorithm();
  if ( thandle.algm_requires_symb_chain() ) {
-  std::cout << "SYMB Call CHAIN version" << std::endl;
   auto h_chain_ptr = thandle.get_host_chain_ptr();
   h_chain_ptr(0) = 0;
   size_type chainlinks_length = 0;
   size_type num_chain_entries = 0;
   int chain_state = 0;
-  //const int cutoff = std::is_same<typename Kokkos::DefaultExecutionSpace::memory_space, Kokkos::HostSpace>::value ? 1 : 256; // TODO chain cutoff hard-coded to 256: make this a "threshold" parameter in the handle
   const int cutoff = cutoff_threshold;
-  std::cout << "  cutoff_thresh = " << cutoff << std::endl;
   for ( size_type i = 0; i < nlevels; ++i ) {
     auto cnpl = nodes_per_level(i);
-    //std::cout << "incre chainlinks_length  npl(" << i << ") = " << nodes_per_level(i) << std::endl;
     if (cnpl <= cutoff) {
       // this nlevels may be part of a chain passed to the "single_block" solver to reduce kernel launches
       chainlinks_length += 1;
@@ -115,13 +121,12 @@ void symbolic_chain_phase(TriSolveHandle &thandle, const NPLViewType &nodes_per_
       chain_state = chainlinks_length > 0 ? 2 : 1;
     }
 
-    // if we hit final nlevels before a trigger to update the chain, than override it - in this case, there was not a larger value to miss cutoff and reset the update
+    // if we hit final nlevels before a trigger to update the chain, than override it 
+    // in this case, there was not a larger value to miss cutoff and reset the update
     if ( chain_state == 0 && i == nlevels-1 ) { chain_state = 1; }
-
 
     if (chain_state == 1) {
       num_chain_entries += 1;
-      //std::cout << "  nce = " << num_chain_entries << "  chainlinks_length = " << chainlinks_length << std::endl;
       if (chainlinks_length == 0) {
         h_chain_ptr(num_chain_entries) = h_chain_ptr(num_chain_entries-1) + 1;
       }
@@ -134,11 +139,10 @@ void symbolic_chain_phase(TriSolveHandle &thandle, const NPLViewType &nodes_per_
     // Two updates required - should only occur if chainlinks_length > 0
     // We have found two things: a non-one length chain, and a subsequent one length chain
     if (chain_state == 2) {
-      if (chainlinks_length == 0) { std::cout << "MAJOR LOGIC ERROR! TERMINATE!" << std::endl; exit(-1); }
+      if (chainlinks_length == 0) { std::runtime_error("MAJOR LOGIC ERROR! TERMINATE!"); }
 
       num_chain_entries += 1;
       h_chain_ptr(num_chain_entries) = h_chain_ptr(num_chain_entries-1) + chainlinks_length;
-      //std::cout << "  nce = " << num_chain_entries << "  chainlinks_length = " << chainlinks_length << std::endl;
 
       num_chain_entries += 1;
       h_chain_ptr(num_chain_entries) = h_chain_ptr(num_chain_entries-1) + 1;
@@ -148,6 +152,7 @@ void symbolic_chain_phase(TriSolveHandle &thandle, const NPLViewType &nodes_per_
     }
   }
   thandle.set_num_chain_entries(num_chain_entries);
+
 #ifdef CHAIN_LVL_OUTPUT_INFO
   std::cout << "  num_chain_entries = " << thandle.get_num_chain_entries() << std::endl;
   for ( size_type i = 0; i < num_chain_entries+1; ++i )
@@ -156,14 +161,6 @@ void symbolic_chain_phase(TriSolveHandle &thandle, const NPLViewType &nodes_per_
   }
 #endif
  }
-  // Usage:
-  // for c in [0, num_chain_entries)
-  //   s = h_chain_ptr(c); e = h_chain_ptr(c+1);
-  //   num_levels_in_current_chain = e - s;
-  //   if nlicc > 256
-  //     call current_alg
-  //   else
-  //     call single_block(s,e)
 
 #ifdef TRISOLVE_SYMB_TIMERS
  std::cout << "  Symbolic Chain Phase Total Time: " << timer_sym_chain_total.seconds() << std::endl;;
@@ -171,19 +168,14 @@ void symbolic_chain_phase(TriSolveHandle &thandle, const NPLViewType &nodes_per_
 } // end symbolic_chain_phase
 
 
-
-
-
 template < class TriSolveHandle, class RowMapType, class EntriesType >
 void lower_tri_symbolic (TriSolveHandle &thandle, const RowMapType drow_map, const EntriesType dentries) {
 #ifdef TRISOLVE_SYMB_TIMERS
   Kokkos::Timer timer_sym_lowertri_total;
 #endif
-  std::cout << "  Begin lower_tri symbolic" << std::endl;
-
  if ( thandle.algm_requires_symb_lvlsched() )
  {
-  // Scheduling currently compute on host - need host copy of all views
+  // Scheduling currently computes on host - need host copy of all views
 
   typedef typename TriSolveHandle::size_type size_type;
 
@@ -194,7 +186,6 @@ void lower_tri_symbolic (TriSolveHandle &thandle, const RowMapType drow_map, con
 
   typedef typename TriSolveHandle::signed_integral_t signed_integral_t;
 
-//  size_type nrows = thandle.get_nrows();
   // Necessary for partitioned persisting sparse matrix
   size_type nrows = drow_map.extent(0)-1;
 
@@ -296,6 +287,7 @@ void lower_tri_symbolic (TriSolveHandle &thandle, const RowMapType drow_map, con
             //TODO possibly store/sort in same order as the nodes in the level_list
             //TODO Maybe run FULL check the first round through without breaking in upper if statement...
             hdiagonal_offsets(row) = offset;
+            std::cout << "lower diagonal found: row = " << row << std::endl;
 #ifdef SYMB_DIAG_CHECK
             ++diag_ctr;
             // FIXME: The starting_node index is skipped, must be manually included
@@ -521,6 +513,7 @@ void upper_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, co
             //TODO possibly store/sort in same order as the nodes in the level_list
             //TODO Maybe run FULL check the first round through without breaking in upper if statement...
             hdiagonal_offsets(row) = offset;
+            std::cout << "upper diagonal found: row = " << row << std::endl;
           }
         } // end for offset , i.e. cols of this row
 
@@ -871,15 +864,28 @@ void numeric_dense_partition_algm(TriSolveHandle &thandle, const RowMapType drow
   }
 #endif
 
+  // Mask for sparse region, based on lower vs upper
+  auto sptrimtx_nrows = thandle.get_persist_sptrimtx_nrows();
   auto diagonal_values = thandle.get_diagonal_values();
   auto diagonal_offsets = thandle.get_diagonal_offsets();
   if (diagonal_values.extent(0) != diagonal_offsets.extent(0)) {
-    //std::cout << "ERROR: diagonal_values different size than diagonal_offsets" << std::endl;
-    throw std::runtime_error ("  numeric error: diagonal_values different size than diagonal_offsets");
+    std::cout << "ERROR: diagonal_values different size than diagonal_offsets" << std::endl;
+    //throw std::runtime_error ("  numeric error: diagonal_values different size than diagonal_offsets");
+    std::runtime_error ("  numeric error: diagonal_values different size than diagonal_offsets");
   }
-  Kokkos::parallel_for("Store diagonal entries by rowid", Kokkos::RangePolicy<Kokkos::DefaultExecutionSpace>(0, diagonal_offsets.extent(0)), 
+  std::cout << "  diagonal_offsets.extent(0) = " << diagonal_offsets.extent(0) << std::endl;
+  std::cout << "  diagonal_values.extent(0) = " << diagonal_values.extent(0) << std::endl;
+  std::cout << "  dvalues.extent(0) = " << dvalues.extent(0) << std::endl;
+  print_view1d_symbolic(dvalues);
+  print_view1d_symbolic(diagonal_offsets, sptrimtx_nrows);
+  print_view1d_symbolic(diagonal_values, sptrimtx_nrows);
+
+  //Kokkos::parallel_for("Store diagonal entries by rowid", Kokkos::RangePolicy<Kokkos::DefaultExecutionSpace>(0, diagonal_offsets.extent(0)), 
+  Kokkos::parallel_for("Store diagonal entries by rowid", Kokkos::RangePolicy<Kokkos::DefaultExecutionSpace>(0, sptrimtx_nrows), 
     KOKKOS_LAMBDA ( const size_type i ) {
-      diagonal_values(i) = dvalues(diagonal_offsets(i));
+      printf("i = %u doffset = %ld  dvalue = %lf\n", (int)i, long(diagonal_offsets(i)), (double)dvalues(diagonal_offsets(i)));
+      auto diagoffset = diagonal_offsets(i);
+      diagonal_values(i) = dvalues(diagoffset);
     });
   Kokkos::fence();
 

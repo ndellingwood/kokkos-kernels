@@ -872,11 +872,11 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
     std::cout << "  ssd = " << sum << "  norm_sqrt_ssd = " << norm_ssd << std::endl;
 
     if ( norm_ssd > 1e-8 ) {
-      std::cout << "Lower Tri Solve FAILURE: norm_ssd = " << norm_ssd << std::endl;
+      std::cout << "Upper Tri Solve FAILURE: norm_ssd = " << norm_ssd << std::endl;
       return 1;
     }
     else {
-     std::cout << "\nLower Tri Solve Init Test: SUCCESS!\n" << std::endl;
+     std::cout << "\nUpper Tri Solve Init Test: SUCCESS!\n" << std::endl;
     }
 
       /*
@@ -926,7 +926,7 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
         scalar_t norm_ssd = sqrt(sum / lhs.extent(0));
         std::cout << "  ssd = " << sum << "  norm_sqrt_ssd = " << norm_ssd << std::endl;
         if ( norm_ssd > 1e-8 ) {
-          std::cout << "Lower Tri Solve FAILURE: norm_ssd = " << norm_ssd << std::endl;
+          std::cout << "Upper Tri Solve FAILURE: norm_ssd = " << norm_ssd << std::endl;
           return 1;
         }
         else {
