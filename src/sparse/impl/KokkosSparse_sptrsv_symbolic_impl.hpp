@@ -56,8 +56,7 @@
 //#define CHAIN_LVL_OUTPUT_INFO
 //#define PRINT1DVIEWSSYMB
 //#define DEBUGSYMBDENSE
-//#define SYMB_DIAG_CHECK
-//
+// we want this out so routine is more general
 //#define SYMB_INIT_ASSUME_LVL
 
 // TODO Pass values array and store diagonal entries - should this always be done or optional?
@@ -214,13 +213,7 @@ void lower_tri_symbolic (TriSolveHandle &thandle, const RowMapType drow_map, con
   // diagonal_offsets is uninitialized - deep_copy unnecessary at the beginning, only needed at the end
   auto hdiagonal_offsets = Kokkos::create_mirror_view(diagonal_offsets);
 
-  auto hdep_tree = thandle.get_host_dep_tree();
-
   size_type level = 0;
-
-#ifdef SYMB_DIAG_CHECK
-  long diag_ctr = 0;
-#endif
 
 #ifdef DENSEPARTITION
   //auto starting_node = thandle.get_lvlsched_node_start();
@@ -272,12 +265,8 @@ void lower_tri_symbolic (TriSolveHandle &thandle, const RowMapType drow_map, con
           // FIXME: For lower_tri, colid is unchanged; shifted for upper_tri...
           if ( previous_level_list(col) == -1 && col != row ) { // unmarked
             if ( col < row ) {
-              if (hdep_tree(col) == -1 || hdep_tree(col) > row) {
-                hdep_tree(col) = row;
-              }
               //std::cout << "  NOT ROOT: col = " << col << "  row = " << row << std::endl;
               is_root = false;
-              //hdep_tree(row) = col; // can have multiple cols - all that matters is the final
               break;
             }
           }
@@ -288,10 +277,6 @@ void lower_tri_symbolic (TriSolveHandle &thandle, const RowMapType drow_map, con
             //TODO Maybe run FULL check the first round through without breaking in upper if statement...
             hdiagonal_offsets(row) = offset;
             std::cout << "lower diagonal found: row = " << row << std::endl;
-#ifdef SYMB_DIAG_CHECK
-            ++diag_ctr;
-            // FIXME: The starting_node index is skipped, must be manually included
-#endif
           }
           else if ( col > row ) {
             std::cout << "SYMB ERROR: Lower tri with colid > rowid - SHOULD NOT HAPPEN!!!";
@@ -321,9 +306,6 @@ void lower_tri_symbolic (TriSolveHandle &thandle, const RowMapType drow_map, con
   } // end while
 
   thandle.set_num_levels(level);
-#ifdef SYMB_DIAG_CHECK
-    std::cout << "  SYMB: diag_ctr = " << diag_ctr << "  nrows = " << nrows << std::endl;
-#endif
 
   // Create the chain now
   if ( thandle.algm_requires_symb_chain() ) {
@@ -376,9 +358,6 @@ void lower_tri_symbolic (TriSolveHandle &thandle, const RowMapType drow_map, con
     }, check_count);
   std::cout << "  devicecheck_count= " << check_count << std::endl;
   }
-#endif
-#ifdef PRINT1DVIEWSSYMB
-  print_view1d_symbolic(hdep_tree);
 #endif
  }
 
@@ -437,8 +416,6 @@ void upper_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, co
   auto diagonal_offsets = thandle.get_diagonal_offsets();
   // diagonal_offsets is uninitialized - deep_copy unnecessary at the beginning, only needed at the end
   auto hdiagonal_offsets = Kokkos::create_mirror_view(diagonal_offsets);
-
-  auto hdep_tree = thandle.get_host_dep_tree();
 
   size_type level = 0;
   // FIXME: starting_node only holds for FULL matrix, not the sparse partition in different algorithm
@@ -499,11 +476,7 @@ void upper_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, co
           // FIXME: Or, is it that the solve needs similar colid adjustment as done here????
           if (previous_level_list(col) == -1 && col != row) { // unmarked
             if ( col > row ) {
-              if (hdep_tree(col) == -1 || hdep_tree(col) < row) {
-                hdep_tree(col) = row;
-              }
               is_root = false;
-              //hdep_tree(row) = col; // can have multiple cols - all that matters is the final
               break;
             }
           }
@@ -588,10 +561,6 @@ void upper_tri_symbolic ( TriSolveHandle &thandle, const RowMapType drow_map, co
     }, check_count);
   std::cout << "  devicecheck_count= " << check_count << std::endl;
   }
-#endif
-
-#ifdef PRINT1DVIEWSSYMB
-  print_view1d_symbolic(hdep_tree);
 #endif
 
  }

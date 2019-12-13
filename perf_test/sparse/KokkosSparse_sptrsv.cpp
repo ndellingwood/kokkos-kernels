@@ -599,18 +599,6 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
       std::cout << "OUTFILE DID NOT OPEN!!!" << std::endl;
     }
 
-    auto htree = kh.get_sptrsv_handle()->get_host_dep_tree();
-    filename = "lower_htree_" + algmstring + ".txt";
-    std::cout << filename << std::endl;
-    outfile.open(filename);
-    if (outfile.is_open()) {
-      for ( size_t i = 0; i < htree.extent(0); ++i )
-        outfile << htree(i) << std::endl;
-      outfile.close();
-    }
-    else {
-      std::cout << "OUTFILE DID NOT OPEN!!!" << std::endl;
-    }
     }
     #endif
 
@@ -990,18 +978,6 @@ int test_sptrsv_perf(std::vector<int> tests, const std::string& lfilename, const
       std::cout << "OUTFILE DID NOT OPEN!!!" << std::endl;
     }
 
-    auto htree = kh.get_sptrsv_handle()->get_host_dep_tree();
-    filename = "upper_htree_" + algmstring + ".txt";
-    std::cout << filename << std::endl;
-    outfile.open(filename);
-    if (outfile.is_open()) {
-      for ( size_t i = 0; i < htree.extent(0); ++i )
-        outfile << htree(i) << std::endl;
-      outfile.close();
-    }
-    else {
-      std::cout << "OUTFILE DID NOT OPEN!!!" << std::endl;
-    }
     }
     #endif
 
