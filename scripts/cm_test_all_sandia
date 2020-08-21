@@ -766,12 +766,13 @@ elif [ "$MACHINE" = "kokkos-dev-2" ]; then
   CLANG8_CUDA_WARNING_FLAGS="-Wall,-Wshadow,-pedantic,-Werror,-Wsign-compare,-Wtype-limits,-Wuninitialized,-Wno-pass-failed"
   PGI_MODULE_LIST="sems-env,sems-cmake/3.12.2,sems-gcc/7.3.0,<COMPILER_NAME>/<COMPILER_VERSION>"
 
+  # Don't run the intel/17 toolchain with CXX14 on kokkos-dev-2
+  # "intel/17.0.1 $BASE_MODULE_LIST "Serial" icpc $INTEL_WARNING_FLAGS"
   if [ "$SPOT_CHECK" = "True" ]; then
     # Format: (compiler module-list build-list exe-name warning-flag)
     COMPILERS=("gcc/7.3.0 $BASE_MODULE_LIST "OpenMP,Pthread" g++ $GCC_WARNING_FLAGS"
                "gcc/8.3.0 $BASE_MODULE_LIST "Serial" g++ $GCC_WARNING_FLAGS"
                "gcc/9.1 $GCC91_MODULE_LIST "OpenMP,Serial" g++ $GCC_WARNING_FLAGS"
-               "intel/17.0.1 $BASE_MODULE_LIST "Serial" icpc $INTEL_WARNING_FLAGS"
                "intel/18.0.5 $BASE_MODULE_LIST "OpenMP" icpc $INTEL_WARNING_FLAGS"
                "intel/19.0.5 $BASE_MODULE_LIST "Pthread" icpc $INTEL_WARNING_FLAGS"
                "clang/8.0 $CLANG8_MODULE_LIST "Cuda_OpenMP,Pthread_Serial" clang++ $CLANG8_CUDA_WARNING_FLAGS"
