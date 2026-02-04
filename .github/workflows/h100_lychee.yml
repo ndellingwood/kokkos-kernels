@@ -60,7 +60,7 @@ jobs:
 
       - name: build_and_install_kokkos
         working-directory: kokkos/build
-        run: make -j56 install
+        run: make -j24 install
 
       - name: configure_kokkos_kernels
         run: |
@@ -83,7 +83,7 @@ jobs:
       - name: build_kokkos_kernels
         working-directory: kokkos-kernels/build
         # lychee has 224 CPUs
-        run: make -j56 all
+        run: make -j24 all
 
       - name: test
         working-directory: kokkos-kernels/build
@@ -129,7 +129,7 @@ jobs:
 
       - name: build_and_install_kokkos
         working-directory: kokkos/build
-        run: make -j56 install
+        run: make -j24 install
 
       - name: configure_kokkos_kernels
         run: |
@@ -152,7 +152,7 @@ jobs:
       - name: build_kokkos_kernels
         working-directory: kokkos-kernels/build
         # lychee has 224 CPUs
-        run: make -j56 all
+        run: make -j24 all
 
       - name: test
         working-directory: kokkos-kernels/build
